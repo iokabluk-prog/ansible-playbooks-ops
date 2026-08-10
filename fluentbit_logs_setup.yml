@@ -10,37 +10,13 @@
 
   tasks:
     # ============================================================
-    # 1. УСТАНОВКА FLUENT BIT
+    # 1. УСТАНОВКА FLUENT BIT (ОФИЦИАЛЬНЫЙ СКРИПТ)
     # ============================================================
-    - name: Install unzip package (if needed)
-      apt:
-        name: unzip
-        state: present
-        update_cache: yes
-
-    - name: Download Fluent Bit .deb package
-      get_url:
-        url: https://github.com/fluent/fluent-bit/releases/download/v2.2.2/fluent-bit_2.2.2_amd64.deb
-        dest: /tmp/fluent-bit.deb
-        timeout: 120
-      register: download_result
-      retries: 3
-      delay: 10
-      until: download_result is success
-      ignore_errors: yes
-
-    - name: Install Fluent Bit (via .deb)
-      apt:
-        deb: /tmp/fluent-bit.deb
-        state: present
-      when: download_result is success
-
-    - name: Install Fluent Bit via official script (if .deb fails)
+    - name: Install Fluent Bit via official script
       shell: |
         curl -fsSL https://raw.githubusercontent.com/fluent/fluent-bit/master/install.sh | sh
       args:
         creates: /usr/bin/fluent-bit
-      when: download_result is failed or download_result is skipped
 
     - name: Create fluent-bit directories
       file:
@@ -78,6 +54,9 @@
               Log_Level     info
               Daemon        off
               Parsers_File  /etc/fluent-bit/parsers.conf
+              HTTP_Server   On
+              HTTP_Listen   0.0.0.0
+              HTTP_Port     2020
 
           # ========================================
           # INPUT: NGINX LOGS
@@ -159,12 +138,6 @@
         rule: allow
         port: '2020'
         proto: tcp
-      ignore_errors: yes
-
-    - name: Clean up
-      file:
-        path: /tmp/fluent-bit.deb
-        state: absent
       ignore_errors: yes
 
     - name: Display Fluent Bit status
