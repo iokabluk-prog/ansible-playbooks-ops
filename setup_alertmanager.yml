@@ -71,12 +71,62 @@
         remote_src: yes
 
     # ============================================================
-    # 2. НАСТРОЙКА ALERTMANAGER (ЧЕРЕЗ ШАБЛОН)
+    # 2. НАСТРОЙКА ALERTMANAGER (ЧЕРЕЗ COPY)
     # ============================================================
-    - name: Create Alertmanager config from template
-      template:
-        src: alertmanager.yml.j2
+    - name: Create Alertmanager config
+      copy:
         dest: "{{ alertmanager_config_dir }}/alertmanager.yml"
+        content: |
+          route:
+            group_by: ['alertname', 'cluster', 'service']
+            group_wait: 10s
+            group_interval: 10s
+            repeat_interval: 1h
+            receiver: 'email-notifications'
+            routes:
+              - match:
+                  severity: 'critical'
+                receiver: 'email-notifications'
+                continue: true
+              - match:
+                  severity: 'warning'
+                receiver: 'email-notifications'
+                continue: true
+
+          receivers:
+            - name: 'email-notifications'
+              email_configs:
+                - to: '{{ email_to }}'
+                  from: '{{ email_from }}'
+                  smarthost: '{{ smtp_host }}:{{ smtp_port }}'
+                  auth_username: '{{ smtp_user }}'
+                  auth_password: '{{ smtp_password }}'
+                  send_resolved: true
+                  headers:
+                    Subject: '⚠️ ALERT: {{ "{{ .GroupLabels.alertname }}" }}'
+                  html: |
+                    <h2>⚠️ Alert Notification</h2>
+                    <p><strong>Alert:</strong> {{ "{{ .GroupLabels.alertname }}" }}</p>
+                    <p><strong>Severity:</strong> {{ "{{ .CommonLabels.severity }}" }}</p>
+                    <p><strong>Status:</strong> {{ "{{ .Status }}" }}</p>
+                    <p><strong>Description:</strong> {{ "{{ .CommonAnnotations.description }}" }}</p>
+                    <p><strong>Summary:</strong> {{ "{{ .CommonAnnotations.summary }}" }}</p>
+                    <hr>
+                    <p><strong>Labels:</strong></p>
+                    <ul>
+                      {{ "{{ range $key, $value := .CommonLabels }}" }}
+                        <li><strong>{{ "{{ $key }}" }}:</strong> {{ "{{ $value }}" }}</li>
+                      {{ "{{ end }}" }}
+                    </ul>
+                    <hr>
+                    <p><strong>Time:</strong> {{ "{{ .StartsAt.Format \"2006-01-02 15:04:05\" }}" }}</p>
+
+          inhibit_rules:
+            - source_match:
+                severity: 'critical'
+              target_match:
+                severity: 'warning'
+              equal: ['alertname', 'cluster']
         owner: prometheus
         group: prometheus
         mode: '0644'
