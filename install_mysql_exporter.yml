@@ -1,0 +1,142 @@
+---
+- name: Install MySQL Exporter on app-main and app-stby
+  hosts: app-main,app-stby
+  become: yes
+  gather_facts: yes
+
+  vars:
+    mysql_user: "app_user"
+    mysql_password: "AppUserPass123!"
+    exporter_version: "0.15.1"
+
+  tasks:
+    # ============================================================
+    # 1. УСТАНОВКА MYSQL EXPORTER
+    # ============================================================
+    - name: Download MySQL Exporter
+      get_url:
+        url: "https://github.com/prometheus/mysqld_exporter/releases/download/v{{ exporter_version }}/mysqld_exporter-{{ exporter_version }}.linux-amd64.tar.gz"
+        dest: /tmp/mysqld_exporter.tar.gz
+      register: download_result
+      retries: 3
+      delay: 10
+      until: download_result is success
+
+    - name: Create prometheus user (if not exists)
+      user:
+        name: prometheus
+        system: yes
+        shell: /sbin/nologin
+        create_home: no
+      ignore_errors: yes
+
+    - name: Extract MySQL Exporter
+      unarchive:
+        src: /tmp/mysqld_exporter.tar.gz
+        dest: /tmp/
+        remote_src: yes
+        creates: "/tmp/mysqld_exporter-{{ exporter_version }}.linux-amd64/mysqld_exporter"
+
+    - name: Install MySQL Exporter binary
+      copy:
+        src: "/tmp/mysqld_exporter-{{ exporter_version }}.linux-amd64/mysqld_exporter"
+        dest: /usr/local/bin/mysqld_exporter
+        mode: '0755'
+        remote_src: yes
+
+    # ============================================================
+    # 2. НАСТРОЙКА КОНФИГА
+    # ============================================================
+    - name: Create MySQL config file for exporter
+      copy:
+        dest: /etc/.my.cnf
+        content: |
+          [client]
+          user={{ mysql_user }}
+          password={{ mysql_password }}
+          host=localhost
+          port=3306
+        owner: prometheus
+        group: prometheus
+        mode: '0600'
+
+    # ============================================================
+    # 3. SYSTEMD SERVICE
+    # ============================================================
+    - name: Create MySQL Exporter systemd service
+      copy:
+        dest: /etc/systemd/system/mysqld_exporter.service
+        content: |
+          [Unit]
+          Description=MySQL Exporter
+          After=network.target
+
+          [Service]
+          User=prometheus
+          Group=prometheus
+          Type=simple
+          ExecStart=/usr/local/bin/mysqld_exporter \
+            --config.my-cnf=/etc/.my.cnf \
+            --web.listen-address=:9104
+          Restart=always
+
+          [Install]
+          WantedBy=multi-user.target
+        mode: '0644'
+
+    - name: Reload systemd
+      systemd:
+        daemon_reload: yes
+
+    - name: Start and enable MySQL Exporter
+      systemd:
+        name: mysqld_exporter
+        state: started
+        enabled: yes
+
+    - name: Wait for MySQL Exporter to start
+      wait_for:
+        port: 9104
+        timeout: 30
+
+    # ============================================================
+    # 4. ПРОВЕРКА
+    # ============================================================
+    - name: Check MySQL Exporter is running
+      uri:
+        url: http://localhost:9104/metrics
+        return_content: yes
+      register: metrics_check
+      until: metrics_check.status == 200
+      retries: 5
+      delay: 2
+
+    - name: Allow MySQL Exporter port in UFW (if active)
+      ufw:
+        rule: allow
+        port: '9104'
+        proto: tcp
+      ignore_errors: yes
+
+    # ============================================================
+    # 5. ОЧИСТКА
+    # ============================================================
+    - name: Clean up archive and extracted files
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /tmp/mysqld_exporter.tar.gz
+        - "/tmp/mysqld_exporter-{{ exporter_version }}.linux-amd64"
+
+    - name: Display success message
+      debug:
+        msg: |
+          ╔══════════════════════════════════════════════════════════════╗
+          ║           ✅ MYSQL EXPORTER INSTALLED SUCCESSFULLY!        ║
+          ╚══════════════════════════════════════════════════════════════╝
+          
+          📊 MySQL Exporter: http://{{ ansible_default_ipv4.address }}:9104
+          📊 Metrics: http://{{ ansible_default_ipv4.address }}:9104/metrics
+          
+          ══════════════════════════════════════════════════════════════
