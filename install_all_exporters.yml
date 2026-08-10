@@ -1,0 +1,338 @@
+---
+- name: Install Node Exporter on all servers
+  hosts: perimeter,app-main,app-stby,ops
+  become: yes
+  gather_facts: yes
+
+  tasks:
+    # ============================================================
+    # 1. УСТАНОВКА NODE EXPORTER
+    # ============================================================
+    - name: Download Node Exporter
+      get_url:
+        url: https://github.com/prometheus/node_exporter/releases/download/v1.7.0/node_exporter-1.7.0.linux-amd64.tar.gz
+        dest: /tmp/node_exporter.tar.gz
+      register: download_result
+      retries: 3
+      delay: 10
+      until: download_result is success
+
+    - name: Create prometheus user (if not exists)
+      user:
+        name: prometheus
+        system: yes
+        shell: /sbin/nologin
+        create_home: no
+      ignore_errors: yes
+
+    - name: Extract Node Exporter
+      unarchive:
+        src: /tmp/node_exporter.tar.gz
+        dest: /tmp/
+        remote_src: yes
+        creates: /tmp/node_exporter-1.7.0.linux-amd64/node_exporter
+
+    - name: Install Node Exporter binary
+      copy:
+        src: /tmp/node_exporter-1.7.0.linux-amd64/node_exporter
+        dest: /usr/local/bin/node_exporter
+        mode: '0755'
+        remote_src: yes
+
+    - name: Create Node Exporter service
+      copy:
+        dest: /etc/systemd/system/node_exporter.service
+        content: |
+          [Unit]
+          Description=Node Exporter
+          After=network.target
+
+          [Service]
+          User=prometheus
+          Group=prometheus
+          Type=simple
+          ExecStart=/usr/local/bin/node_exporter --web.listen-address=:9100
+          Restart=always
+
+          [Install]
+          WantedBy=multi-user.target
+        mode: '0644'
+
+    - name: Reload systemd
+      systemd:
+        daemon_reload: yes
+
+    - name: Start and enable Node Exporter
+      systemd:
+        name: node_exporter
+        state: started
+        enabled: yes
+
+    - name: Wait for Node Exporter to start
+      wait_for:
+        port: 9100
+        timeout: 30
+
+    - name: Allow Node Exporter port in UFW (if active)
+      ufw:
+        rule: allow
+        port: '9100'
+        proto: tcp
+      ignore_errors: yes
+
+    - name: Clean up
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /tmp/node_exporter.tar.gz
+        - /tmp/node_exporter-1.7.0.linux-amd64
+
+- name: Install MySQL Exporter on app-main and app-stby
+  hosts: app-main,app-stby
+  become: yes
+  gather_facts: yes
+
+  vars:
+    mysql_user: "app_user"
+    mysql_password: "AppUserPass123!"
+
+  tasks:
+    # ============================================================
+    # 1. УСТАНОВКА MYSQL EXPORTER
+    # ============================================================
+    - name: Download MySQL Exporter
+      get_url:
+        url: https://github.com/prometheus/mysqld_exporter/releases/download/v0.15.1/mysqld_exporter-0.15.1.linux-amd64.tar.gz
+        dest: /tmp/mysqld_exporter.tar.gz
+      register: download_result
+      retries: 3
+      delay: 10
+      until: download_result is success
+
+    - name: Create prometheus user (if not exists)
+      user:
+        name: prometheus
+        system: yes
+        shell: /sbin/nologin
+        create_home: no
+      ignore_errors: yes
+
+    - name: Extract MySQL Exporter
+      unarchive:
+        src: /tmp/mysqld_exporter.tar.gz
+        dest: /tmp/
+        remote_src: yes
+        creates: /tmp/mysqld_exporter-0.15.1.linux-amd64/mysqld_exporter
+
+    - name: Install MySQL Exporter binary
+      copy:
+        src: /tmp/mysqld_exporter-0.15.1.linux-amd64/mysqld_exporter
+        dest: /usr/local/bin/mysqld_exporter
+        mode: '0755'
+        remote_src: yes
+
+    - name: Create MySQL config file for exporter
+      copy:
+        dest: /etc/.my.cnf
+        content: |
+          [client]
+          user={{ mysql_user }}
+          password={{ mysql_password }}
+          host=localhost
+          port=3306
+        owner: prometheus
+        group: prometheus
+        mode: '0600'
+
+    - name: Create MySQL Exporter service
+      copy:
+        dest: /etc/systemd/system/mysqld_exporter.service
+        content: |
+          [Unit]
+          Description=MySQL Exporter
+          After=network.target
+
+          [Service]
+          User=prometheus
+          Group=prometheus
+          Type=simple
+          ExecStart=/usr/local/bin/mysqld_exporter \
+            --config.my-cnf=/etc/.my.cnf \
+            --web.listen-address=:9104
+          Restart=always
+
+          [Install]
+          WantedBy=multi-user.target
+        mode: '0644'
+
+    - name: Reload systemd
+      systemd:
+        daemon_reload: yes
+
+    - name: Start and enable MySQL Exporter
+      systemd:
+        name: mysqld_exporter
+        state: started
+        enabled: yes
+
+    - name: Wait for MySQL Exporter to start
+      wait_for:
+        port: 9104
+        timeout: 30
+
+    - name: Allow MySQL Exporter port in UFW (if active)
+      ufw:
+        rule: allow
+        port: '9104'
+        proto: tcp
+      ignore_errors: yes
+
+    - name: Clean up
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /tmp/mysqld_exporter.tar.gz
+        - /tmp/mysqld_exporter-0.15.1.linux-amd64
+
+- name: Install Blackbox Exporter on Ops
+  hosts: ops
+  become: yes
+  gather_facts: yes
+
+  tasks:
+    # ============================================================
+    # 1. УСТАНОВКА BLACKBOX EXPORTER
+    # ============================================================
+    - name: Download Blackbox Exporter
+      get_url:
+        url: https://github.com/prometheus/blackbox_exporter/releases/download/v0.24.0/blackbox_exporter-0.24.0.linux-amd64.tar.gz
+        dest: /tmp/blackbox_exporter.tar.gz
+      register: download_result
+      retries: 3
+      delay: 10
+      until: download_result is success
+
+    - name: Create prometheus user (if not exists)
+      user:
+        name: prometheus
+        system: yes
+        shell: /sbin/nologin
+        create_home: no
+      ignore_errors: yes
+
+    - name: Create blackbox config directory
+      file:
+        path: /etc/blackbox_exporter
+        state: directory
+        owner: prometheus
+        group: prometheus
+        mode: '0755'
+
+    - name: Create Blackbox config
+      copy:
+        dest: /etc/blackbox_exporter/blackbox.yml
+        content: |
+          modules:
+            http_2xx:
+              prober: http
+              timeout: 5s
+              http:
+                valid_http_versions: ["HTTP/1.1", "HTTP/2.0"]
+                valid_status_codes: [200, 301, 302, 303, 307, 308]
+                follow_redirects: true
+        owner: prometheus
+        group: prometheus
+        mode: '0644'
+
+    - name: Extract Blackbox Exporter
+      unarchive:
+        src: /tmp/blackbox_exporter.tar.gz
+        dest: /tmp/
+        remote_src: yes
+        creates: /tmp/blackbox_exporter-0.24.0.linux-amd64/blackbox_exporter
+
+    - name: Install Blackbox Exporter binary
+      copy:
+        src: /tmp/blackbox_exporter-0.24.0.linux-amd64/blackbox_exporter
+        dest: /usr/local/bin/blackbox_exporter
+        mode: '0755'
+        remote_src: yes
+
+    - name: Create Blackbox Exporter service
+      copy:
+        dest: /etc/systemd/system/blackbox_exporter.service
+        content: |
+          [Unit]
+          Description=Blackbox Exporter
+          After=network.target
+
+          [Service]
+          User=prometheus
+          Group=prometheus
+          Type=simple
+          ExecStart=/usr/local/bin/blackbox_exporter \
+            --config.file=/etc/blackbox_exporter/blackbox.yml \
+            --web.listen-address=:9115
+          Restart=always
+
+          [Install]
+          WantedBy=multi-user.target
+        mode: '0644'
+
+    - name: Reload systemd
+      systemd:
+        daemon_reload: yes
+
+    - name: Start and enable Blackbox Exporter
+      systemd:
+        name: blackbox_exporter
+        state: started
+        enabled: yes
+
+    - name: Wait for Blackbox Exporter to start
+      wait_for:
+        port: 9115
+        timeout: 30
+
+    - name: Allow Blackbox Exporter port in UFW (if active)
+      ufw:
+        rule: allow
+        port: '9115'
+        proto: tcp
+      ignore_errors: yes
+
+    - name: Clean up
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /tmp/blackbox_exporter.tar.gz
+        - /tmp/blackbox_exporter-0.24.0.linux-amd64
+
+- name: Display final status
+  hosts: ops
+  become: yes
+  gather_facts: yes
+
+  tasks:
+    - name: Check Prometheus targets
+      uri:
+        url: http://localhost:9090/api/v1/targets
+        return_content: yes
+      register: targets_api
+
+    - name: Display final status
+      debug:
+        msg: |
+          ╔══════════════════════════════════════════════════════════════╗
+          ║           ✅ ALL EXPORTERS INSTALLED SUCCESSFULLY!         ║
+          ╚══════════════════════════════════════════════════════════════╝
+          
+          📌 Node Exporters (9100): Все серверы
+          📌 MySQL Exporters (9104): app-main, app-stby
+          📌 Blackbox Exporter (9115): ops
+          📊 Prometheus: http://192.168.56.40:9090
+          
+          ══════════════════════════════════════════════════════════════
