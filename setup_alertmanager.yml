@@ -14,7 +14,7 @@
     smtp_host: "smtp.mail.ru"
     smtp_port: 465
     smtp_user: "i27021985@mail.ru"
-    smtp_password: "jgKPy6JcAQJVaR28bY7S"  # Замените на реальный пароль приложения
+    smtp_password: "jgKPy6JcAQJVaR28bY7S"  # Замените на пароль приложения
 
   tasks:
     # ============================================================
@@ -71,7 +71,7 @@
         remote_src: yes
 
     # ============================================================
-    # 2. НАСТРОЙКА ALERTMANAGER (ИСПРАВЛЕННАЯ)
+    # 2. НАСТРОЙКА ALERTMANAGER
     # ============================================================
     - name: Create Alertmanager config
       copy:
@@ -329,6 +329,76 @@
                   annotations:
                     summary: "HTTP service on App-Stby is down"
                     description: "HTTP service on App-Stby (http://192.168.56.30) is not responding."
+
+                - alert: HighCPU_AppMain
+                  expr: 100 - (avg(rate(node_cpu_seconds_total{instance="app-main", mode="idle"}[5m])) * 100) > 80
+                  for: 5m
+                  labels:
+                    severity: warning
+                    service: app-main
+                  annotations:
+                    summary: "High CPU usage on App-Main"
+                    description: "App-Main CPU usage is above 80% for more than 5 minutes."
+
+                - alert: HighCPU_AppStby
+                  expr: 100 - (avg(rate(node_cpu_seconds_total{instance="app-stby", mode="idle"}[5m])) * 100) > 80
+                  for: 5m
+                  labels:
+                    severity: warning
+                    service: app-stby
+                  annotations:
+                    summary: "High CPU usage on App-Stby"
+                    description: "App-Stby CPU usage is above 80% for more than 5 minutes."
+
+                - alert: HighMemory_AppMain
+                  expr: (1 - (node_memory_MemAvailable_bytes{instance="app-main"} / node_memory_MemTotal_bytes{instance="app-main"})) * 100 > 85
+                  for: 5m
+                  labels:
+                    severity: warning
+                    service: app-main
+                  annotations:
+                    summary: "High Memory usage on App-Main"
+                    description: "App-Main Memory usage is above 85% for more than 5 minutes."
+
+                - alert: HighMemory_AppStby
+                  expr: (1 - (node_memory_MemAvailable_bytes{instance="app-stby"} / node_memory_MemTotal_bytes{instance="app-stby"})) * 100 > 85
+                  for: 5m
+                  labels:
+                    severity: warning
+                    service: app-stby
+                  annotations:
+                    summary: "High Memory usage on App-Stby"
+                    description: "App-Stby Memory usage is above 85% for more than 5 minutes."
+
+                - alert: HighDiskUsage_AppMain
+                  expr: (1 - (node_filesystem_avail_bytes{instance="app-main", mountpoint="/"} / node_filesystem_size_bytes{instance="app-main", mountpoint="/"})) * 100 > 80
+                  for: 5m
+                  labels:
+                    severity: warning
+                    service: app-main
+                  annotations:
+                    summary: "High Disk usage on App-Main"
+                    description: "App-Main Disk usage is above 80% for more than 5 minutes."
+
+                - alert: HighDiskUsage_AppStby
+                  expr: (1 - (node_filesystem_avail_bytes{instance="app-stby", mountpoint="/"} / node_filesystem_size_bytes{instance="app-stby", mountpoint="/"})) * 100 > 80
+                  for: 5m
+                  labels:
+                    severity: warning
+                    service: app-stby
+                  annotations:
+                    summary: "High Disk usage on App-Stby"
+                    description: "App-Stby Disk usage is above 80% for more than 5 minutes."
+
+                - alert: MySQLReplicationDown
+                  expr: mysql_global_status_slave_running == 0
+                  for: 1m
+                  labels:
+                    severity: critical
+                    service: mysql
+                  annotations:
+                    summary: "MySQL replication is down"
+                    description: "MySQL replication on app-stby is not running."
         owner: prometheus
         group: prometheus
         mode: '0644'
@@ -385,6 +455,10 @@
           📋 Alerts configured:
           - Server Down (perimeter, app-main, app-stby)
           - HTTP Service Down (perimeter, app-main, app-stby)
+          - High CPU usage (app-main, app-stby)
+          - High Memory usage (app-main, app-stby)
+          - High Disk usage (app-main, app-stby)
+          - MySQL Replication Down (app-stby)
           
           ══════════════════════════════════════════════════════════════
 
