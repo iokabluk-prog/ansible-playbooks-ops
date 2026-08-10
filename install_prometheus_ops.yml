@@ -1,0 +1,217 @@
+---
+- name: Install Prometheus on Ops server
+  hosts: ops
+  become: yes
+  gather_facts: yes
+
+  tasks:
+    # ============================================================
+    # 1. СКАЧИВАНИЕ PROMETHEUS НА OPS
+    # ============================================================
+    - name: Download Prometheus archive directly to Ops
+      get_url:
+        url: https://github.com/prometheus/prometheus/releases/download/v2.47.0/prometheus-2.47.0.linux-amd64.tar.gz
+        dest: /tmp/prometheus.tar.gz
+        timeout: 120
+      register: download_result
+      retries: 3
+      delay: 10
+      until: download_result is success
+
+    - name: Check if archive downloaded
+      stat:
+        path: /tmp/prometheus.tar.gz
+      register: archive_file
+
+    - name: Fail if archive not downloaded
+      fail:
+        msg: "Archive /tmp/prometheus.tar.gz not downloaded"
+      when: not archive_file.stat.exists
+
+    # ============================================================
+    # 2. СОЗДАНИЕ ПОЛЬЗОВАТЕЛЯ И ДИРЕКТОРИЙ
+    # ============================================================
+    - name: Create prometheus user
+      user:
+        name: prometheus
+        system: yes
+        shell: /sbin/nologin
+        create_home: no
+      ignore_errors: yes
+
+    - name: Create prometheus directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: prometheus
+        group: prometheus
+        mode: '0755'
+      loop:
+        - /etc/prometheus
+        - /var/lib/prometheus
+        - /var/log/prometheus
+
+    # ============================================================
+    # 3. РАСПАКОВКА И УСТАНОВКА
+    # ============================================================
+    - name: Extract Prometheus archive
+      unarchive:
+        src: /tmp/prometheus.tar.gz
+        dest: /tmp/
+        remote_src: yes
+        creates: /tmp/prometheus-2.47.0.linux-amd64/prometheus
+
+    - name: Find extracted directory
+      find:
+        paths: /tmp
+        patterns: "prometheus-*.linux-amd64"
+        file_type: directory
+      register: extracted_dir
+
+    - name: Set extracted directory variable
+      set_fact:
+        prometheus_dir: "{{ extracted_dir.files[0].path }}"
+      when: extracted_dir.files | length > 0
+
+    - name: Install Prometheus binaries
+      copy:
+        src: "{{ prometheus_dir }}/{{ item }}"
+        dest: "/usr/local/bin/{{ item }}"
+        mode: '0755'
+        remote_src: yes
+      loop:
+        - prometheus
+        - promtool
+      when: extracted_dir.files | length > 0
+
+    - name: Install Prometheus consoles
+      copy:
+        src: "{{ prometheus_dir }}/consoles/"
+        dest: /etc/prometheus/consoles/
+        remote_src: yes
+        directory_mode: yes
+      when: extracted_dir.files | length > 0
+
+    - name: Install Prometheus console_libraries
+      copy:
+        src: "{{ prometheus_dir }}/console_libraries/"
+        dest: /etc/prometheus/console_libraries/
+        remote_src: yes
+        directory_mode: yes
+      when: extracted_dir.files | length > 0
+
+    - name: Set ownership
+      file:
+        path: /etc/prometheus
+        owner: prometheus
+        group: prometheus
+        recurse: yes
+
+    # ============================================================
+    # 4. КОНФИГУРАЦИЯ
+    # ============================================================
+    - name: Create Prometheus config
+      copy:
+        dest: /etc/prometheus/prometheus.yml
+        content: |
+          global:
+            scrape_interval: 15s
+            evaluation_interval: 15s
+
+          alerting:
+            alertmanagers:
+              - static_configs:
+                  - targets: []
+
+          rule_files: []
+
+          scrape_configs:
+            - job_name: 'prometheus'
+              static_configs:
+                - targets: ['localhost:9090']
+            - job_name: 'node_exporter'
+              static_configs:
+                - targets: ['localhost:9100']
+        owner: prometheus
+        group: prometheus
+        mode: '0644'
+
+    # ============================================================
+    # 5. SYSTEMD SERVICE
+    # ============================================================
+    - name: Create Prometheus systemd service
+      copy:
+        dest: /etc/systemd/system/prometheus.service
+        content: |
+          [Unit]
+          Description=Prometheus
+          After=network.target
+
+          [Service]
+          User=prometheus
+          Group=prometheus
+          Type=simple
+          ExecStart=/usr/local/bin/prometheus \
+            --config.file=/etc/prometheus/prometheus.yml \
+            --storage.tsdb.path=/var/lib/prometheus \
+            --web.listen-address=:9090
+          Restart=always
+
+          [Install]
+          WantedBy=multi-user.target
+        mode: '0644'
+
+    - name: Reload systemd
+      systemd:
+        daemon_reload: yes
+
+    - name: Enable and start Prometheus
+      systemd:
+        name: prometheus
+        state: started
+        enabled: yes
+
+    # ============================================================
+    # 6. ПРОВЕРКА
+    # ============================================================
+    - name: Wait for Prometheus to start
+      wait_for:
+        port: 9090
+        timeout: 30
+
+    - name: Check Prometheus status
+      command: systemctl status prometheus --no-pager
+      register: prometheus_status
+      changed_when: false
+
+    - name: Check Prometheus metrics
+      uri:
+        url: http://localhost:9090/metrics
+        return_content: yes
+      register: metrics
+      until: metrics.status == 200
+      retries: 5
+      delay: 2
+
+    - name: Display success message
+      debug:
+        msg: |
+          ╔══════════════════════════════════════════════════════════════╗
+          ║           ✅ PROMETHEUS INSTALLED SUCCESSFULLY!            ║
+          ╚══════════════════════════════════════════════════════════════╝
+          
+          📊 Prometheus: http://192.168.56.40:9090
+          📊 Metrics: http://192.168.56.40:9090/metrics
+          
+          ══════════════════════════════════════════════════════════════
+
+    # ============================================================
+    # 7. ОЧИСТКА
+    # ============================================================
+    - name: Clean up archive and extracted files
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /tmp/prometheus.tar.gz
+        - /tmp/prometheus-2.47.0.linux-amd64
