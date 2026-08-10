@@ -1,0 +1,369 @@
+---
+- name: Install Loki on Ops and configure Grafana
+  hosts: ops
+  become: yes
+  gather_facts: yes
+
+  vars:
+    loki_version: "2.9.0"
+    loki_install_dir: "/usr/local/bin"
+    loki_config_dir: "/etc/loki"
+    loki_data_dir: "/var/lib/loki"
+    loki_log_dir: "/var/log/loki"
+
+  tasks:
+    # ============================================================
+    # 1. УСТАНОВКА LOKI
+    # ============================================================
+    - name: Download Loki binary
+      get_url:
+        url: "https://github.com/grafana/loki/releases/download/v{{ loki_version }}/loki-linux-amd64.zip"
+        dest: /tmp/loki.zip
+        timeout: 120
+      register: download_result
+      retries: 3
+      delay: 10
+      until: download_result is success
+
+    - name: Create prometheus user (if not exists)
+      user:
+        name: prometheus
+        system: yes
+        shell: /sbin/nologin
+        create_home: no
+      ignore_errors: yes
+
+    - name: Create Loki directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: prometheus
+        group: prometheus
+        mode: '0755'
+      loop:
+        - "{{ loki_config_dir }}"
+        - "{{ loki_data_dir }}"
+        - "{{ loki_log_dir }}"
+
+    - name: Unzip Loki binary
+      unarchive:
+        src: /tmp/loki.zip
+        dest: /tmp/
+        remote_src: yes
+        creates: /tmp/loki-linux-amd64
+
+    - name: Install Loki binary
+      copy:
+        src: /tmp/loki-linux-amd64
+        dest: "{{ loki_install_dir }}/loki"
+        mode: '0755'
+        remote_src: yes
+
+    # ============================================================
+    # 2. НАСТРОЙКА LOKI
+    # ============================================================
+    - name: Create Loki configuration file
+      copy:
+        dest: "{{ loki_config_dir }}/config.yml"
+        content: |
+          auth_enabled: false
+
+          server:
+            http_listen_port: 3100
+            grpc_listen_port: 9096
+
+          ingester:
+            wal:
+              enabled: true
+              dir: "{{ loki_data_dir }}/wal"
+            lifecycler:
+              address: 127.0.0.1
+              ring:
+                kvstore:
+                  store: inmemory
+                replication_factor: 1
+            chunk_idle_period: 5m
+            chunk_retain_period: 30s
+
+          schema_config:
+            configs:
+              - from: 2020-10-24
+                store: boltdb-shipper
+                object_store: filesystem
+                schema: v11
+                index:
+                  prefix: index_
+                  period: 24h
+
+          storage_config:
+            boltdb_shipper:
+              active_index_directory: "{{ loki_data_dir }}/boltdb-shipper-active"
+              cache_location: "{{ loki_data_dir }}/boltdb-shipper-cache"
+              cache_ttl: 24h
+              shared_store: filesystem
+            filesystem:
+              directory: "{{ loki_data_dir }}/chunks"
+
+          limits_config:
+            retention_period: 720h
+            max_query_length: 720h
+            max_query_parallelism: 32
+
+          compactor:
+            working_directory: "{{ loki_data_dir }}/compactor"
+            shared_store: filesystem
+            retention_enabled: true
+            retention_delete_delay: 2h
+        owner: prometheus
+        group: prometheus
+        mode: '0644'
+
+    # ============================================================
+    # 3. SYSTEMD SERVICE
+    # ============================================================
+    - name: Create Loki systemd service
+      copy:
+        dest: /etc/systemd/system/loki.service
+        content: |
+          [Unit]
+          Description=Loki
+          After=network.target
+          Documentation=https://grafana.com/docs/loki/
+
+          [Service]
+          User=prometheus
+          Group=prometheus
+          Type=simple
+          ExecStart={{ loki_install_dir }}/loki -config.file={{ loki_config_dir }}/config.yml
+          Restart=always
+          RestartSec=10
+          LimitNOFILE=65536
+
+          [Install]
+          WantedBy=multi-user.target
+        mode: '0644'
+
+    - name: Reload systemd
+      systemd:
+        daemon_reload: yes
+
+    - name: Start and enable Loki
+      systemd:
+        name: loki
+        state: started
+        enabled: yes
+
+    - name: Wait for Loki to start
+      wait_for:
+        port: 3100
+        timeout: 30
+        delay: 5
+
+    - name: Check Loki status
+      command: systemctl status loki --no-pager
+      register: loki_status
+      changed_when: false
+
+    - name: Allow Loki port in UFW (if active)
+      ufw:
+        rule: allow
+        port: '3100'
+        proto: tcp
+      ignore_errors: yes
+
+    # ============================================================
+    # 4. НАСТРОЙКА GRAFANA DATASOURCE
+    # ============================================================
+    - name: Create Grafana datasource directory
+      file:
+        path: /etc/grafana/provisioning/datasources
+        state: directory
+        owner: grafana
+        group: grafana
+        mode: '0755'
+
+    - name: Configure Loki datasource in Grafana
+      copy:
+        dest: /etc/grafana/provisioning/datasources/loki.yml
+        content: |
+          apiVersion: 1
+          datasources:
+            - name: Loki
+              type: loki
+              access: proxy
+              url: http://localhost:3100
+              isDefault: false
+              editable: true
+              jsonData:
+                maxLines: 1000
+        owner: grafana
+        group: grafana
+        mode: '0644'
+
+    # ============================================================
+    # 5. СОЗДАНИЕ DASHBOARD ДЛЯ ЛОГОВ
+    # ============================================================
+    - name: Create Grafana dashboards directory
+      file:
+        path: /etc/grafana/provisioning/dashboards
+        state: directory
+        owner: grafana
+        group: grafana
+        mode: '0755'
+
+    - name: Create dashboard config for provisioning
+      copy:
+        dest: /etc/grafana/provisioning/dashboards/dashboards.yml
+        content: |
+          apiVersion: 1
+          providers:
+            - name: 'default'
+              orgId: 1
+              folder: ''
+              type: file
+              disableDeletion: false
+              updateIntervalSeconds: 60
+              allowUiUpdates: true
+              options:
+                path: /etc/grafana/dashboards
+        owner: grafana
+        group: grafana
+        mode: '0644'
+
+    - name: Create dashboard directory
+      file:
+        path: /etc/grafana/dashboards
+        state: directory
+        owner: grafana
+        group: grafana
+        mode: '0755'
+
+    - name: Create Loki logs dashboard
+      copy:
+        dest: /etc/grafana/dashboards/loki_logs.json
+        content: |
+          {
+            "title": "Loki Logs Dashboard",
+            "uid": "loki_logs",
+            "version": 1,
+            "tags": ["logs", "loki"],
+            "timezone": "browser",
+            "schemaVersion": 16,
+            "refresh": "30s",
+            "panels": [
+              {
+                "id": 1,
+                "title": "Logs Explorer",
+                "type": "logs",
+                "targets": [
+                  {
+                    "expr": "{job=\"fluentbit\"}",
+                    "refId": "A"
+                  }
+                ],
+                "gridPos": {"h": 20, "w": 24, "x": 0, "y": 0}
+              },
+              {
+                "id": 2,
+                "title": "Log Volume",
+                "type": "timeseries",
+                "targets": [
+                  {
+                    "expr": "count_over_time({job=\"fluentbit\"}[1m])",
+                    "legendFormat": "Logs per minute",
+                    "refId": "A"
+                  }
+                ],
+                "fieldConfig": {
+                  "defaults": {
+                    "unit": "short"
+                  }
+                },
+                "gridPos": {"h": 8, "w": 12, "x": 0, "y": 20}
+              },
+              {
+                "id": 3,
+                "title": "Logs by Host",
+                "type": "piechart",
+                "targets": [
+                  {
+                    "expr": "count_over_time({job=\"fluentbit\"}[5m])",
+                    "legendFormat": "host",
+                    "refId": "A"
+                  }
+                ],
+                "gridPos": {"h": 8, "w": 12, "x": 12, "y": 20}
+              }
+            ]
+          }
+        owner: grafana
+        group: grafana
+        mode: '0644'
+
+    # ============================================================
+    # 6. ПЕРЕЗАПУСК GRAFANA
+    # ============================================================
+    - name: Restart Grafana to apply datasources and dashboards
+      systemd:
+        name: grafana-server
+        state: restarted
+
+    - name: Wait for Grafana to restart
+      wait_for:
+        port: 3000
+        timeout: 30
+        delay: 5
+
+    # ============================================================
+    # 7. ПРОВЕРКА
+    # ============================================================
+    - name: Check Loki readiness
+      uri:
+        url: http://localhost:3100/ready
+        return_content: yes
+      register: loki_ready
+      until: loki_ready.status == 200
+      retries: 10
+      delay: 2
+
+    - name: Check Loki API
+      uri:
+        url: http://localhost:3100/metrics
+        return_content: yes
+      register: loki_metrics
+      until: loki_metrics.status == 200
+      retries: 5
+      delay: 2
+
+    - name: Display Grafana info
+      debug:
+        msg: |
+          ╔══════════════════════════════════════════════════════════════╗
+          ║           ✅ LOKI INSTALLED SUCCESSFULLY!                  ║
+          ╚══════════════════════════════════════════════════════════════╝
+          
+          📊 Loki: http://192.168.56.40:3100
+          📊 Loki Ready: http://192.168.56.40:3100/ready
+          📊 Loki Config: {{ loki_config_dir }}/config.yml
+          📊 Loki Data: {{ loki_data_dir }}
+          
+          📋 Grafana:
+          - URL: http://192.168.56.40:3000
+          - User: admin
+          - Password: admin
+          
+          📋 Dashboards:
+          - Loki Logs Dashboard
+            - Logs Explorer
+            - Log Volume
+            - Logs by Host
+          
+          ══════════════════════════════════════════════════════════════
+
+    - name: Clean up
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /tmp/loki.zip
+        - /tmp/loki-linux-amd64
