@@ -1,0 +1,164 @@
+- name: Install Loki (fixed)
+  hosts: ops
+  become: yes
+  
+  tasks:
+    - name: Download Loki
+      get_url:
+        url: https://github.com/grafana/loki/releases/download/v2.9.0/loki-linux-amd64.zip
+        dest: /tmp/loki.zip
+        timeout: 120
+
+    - name: Check if zip file exists
+      stat:
+        path: /tmp/loki.zip
+      register: loki_zip
+
+    - name: Fail if zip not found
+      fail:
+        msg: "Loki zip file not downloaded"
+      when: not loki_zip.stat.exists
+
+    - name: Unzip Loki
+      shell: |
+        cd /tmp
+        unzip -o loki.zip
+      args:
+        creates: /tmp/loki-linux-amd64
+
+    - name: Check if binary exists
+      stat:
+        path: /tmp/loki-linux-amd64
+      register: loki_binary
+
+    - name: Fail if binary not found
+      fail:
+        msg: "Loki binary not found after extraction"
+      when: not loki_binary.stat.exists
+
+    - name: Install Loki
+      copy:
+        src: /tmp/loki-linux-amd64
+        dest: /usr/local/bin/loki
+        mode: '0755'
+        remote_src: yes
+
+    - name: Create Loki directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: prometheus
+        group: prometheus
+        mode: '0755'
+      loop:
+        - /etc/loki
+        - /var/lib/loki
+        - /var/log/loki
+
+    - name: Create Loki config
+      copy:
+        dest: /etc/loki/config.yml
+        content: |
+          auth_enabled: false
+          
+          server:
+            http_listen_port: 3100
+            grpc_listen_port: 9096
+          
+          ingester:
+            wal:
+              enabled: true
+              dir: /var/lib/loki/wal
+            lifecycler:
+              address: 127.0.0.1
+              ring:
+                kvstore:
+                  store: inmemory
+                replication_factor: 1
+            chunk_idle_period: 5m
+            chunk_retain_period: 30s
+          
+          schema_config:
+            configs:
+              - from: 2020-10-24
+                store: boltdb-shipper
+                object_store: filesystem
+                schema: v11
+                index:
+                  prefix: index_
+                  period: 24h
+          
+          storage_config:
+            boltdb_shipper:
+              active_index_directory: /var/lib/loki/boltdb-shipper-active
+              cache_location: /var/lib/loki/boltdb-shipper-cache
+              cache_ttl: 24h
+              shared_store: filesystem
+            filesystem:
+              directory: /var/lib/loki/chunks
+          
+          limits_config:
+            retention_period: 720h
+          
+          compactor:
+            working_directory: /var/lib/loki/compactor
+            shared_store: filesystem
+        owner: prometheus
+        group: prometheus
+        mode: '0644'
+
+    - name: Create Loki service
+      copy:
+        dest: /etc/systemd/system/loki.service
+        content: |
+          [Unit]
+          Description=Loki
+          After=network.target
+          Documentation=https://grafana.com/docs/loki/
+
+          [Service]
+          User=prometheus
+          Group=prometheus
+          Type=simple
+          ExecStart=/usr/local/bin/loki -config.file=/etc/loki/config.yml
+          Restart=always
+          RestartSec=10
+
+          [Install]
+          WantedBy=multi-user.target
+        mode: '0644'
+
+    - name: Reload systemd
+      systemd:
+        daemon_reload: yes
+
+    - name: Start Loki
+      systemd:
+        name: loki
+        state: started
+        enabled: yes
+
+    - name: Wait for Loki to start
+      wait_for:
+        port: 3100
+        timeout: 30
+
+    - name: Check Loki status
+      command: systemctl status loki --no-pager
+      register: loki_status
+      changed_when: false
+
+    - name: Display Loki info
+      debug:
+        msg: |
+          ✅ Loki installed!
+          URL: http://192.168.56.40:3100
+
+    - name: Clean up
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /tmp/loki.zip
+        - /tmp/loki-linux-amd64
+      ignore_errors: yes

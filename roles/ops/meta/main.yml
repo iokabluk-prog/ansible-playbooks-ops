@@ -1,0 +1,22 @@
+---
+galaxy_info:
+  author: DevOps
+  description: Ops server (Monitoring + Logs + Alerts + Backups)
+  company: Your Company
+  license: MIT
+  min_ansible_version: 2.9
+  platforms:
+    - name: Ubuntu
+      versions:
+        - jammy
+  galaxy_tags:
+    - monitoring
+    - prometheus
+    - grafana
+    - loki
+    - fluentbit
+    - alertmanager
+    - backups
+    - ops
+
+dependencies: []

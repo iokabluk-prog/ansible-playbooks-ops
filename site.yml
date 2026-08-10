@@ -1,0 +1,28 @@
+---
+- name: Configure Perimeter Server
+  hosts: perimeter_group
+  become: yes
+  gather_facts: yes
+  roles:
+    - perimeter
+
+- name: Configure App-Main Server
+  hosts: app_group
+  become: yes
+  gather_facts: yes
+  roles:
+    - app_main
+
+- name: Configure App-Stby Server
+  hosts: app_group
+  become: yes
+  gather_facts: yes
+  roles:
+    - app_stby
+
+- name: Configure Ops Server
+  hosts: ops_group
+  become: yes
+  gather_facts: yes
+  roles:
+    - ops

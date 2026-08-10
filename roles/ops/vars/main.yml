@@ -1,0 +1,18 @@
+---
+# Variables for Ops role
+
+packages:
+  - nginx
+  - curl
+  - wget
+  - htop
+  - net-tools
+  - unzip
+  - gpg
+  - apt-transport-https
+  - software-properties-common
+  - gnupg2
+  - python3-pip
+  - ufw
+  - cron
+  - rsync

@@ -1,0 +1,45 @@
+[SERVICE]
+    Flush         1
+    Log_Level     info
+    Daemon        off
+    Parsers_File  parsers.conf
+
+[INPUT]
+    Name          tail
+    Path          /var/log/nginx/*.log
+    Parser        nginx
+    Tag           nginx
+
+[INPUT]
+    Name          tail
+    Path          /var/log/mysql/*.log
+    Parser        syslog
+    Tag           mysql
+
+[INPUT]
+    Name          tail
+    Path          /var/log/syslog
+    Parser        syslog
+    Tag           syslog
+
+[INPUT]
+    Name          cpu
+    Tag           cpu
+    Interval_Sec  10
+
+[INPUT]
+    Name          mem
+    Tag           mem
+    Interval_Sec  10
+
+[FILTER]
+    Name          modify
+    Match         *
+    Add           hostname {{ ansible_hostname }}
+
+[OUTPUT]
+    Name          loki
+    Match         *
+    Host          localhost
+    Port          {{ monitoring.loki.port }}
+    Labels        job=fluentbit, host={{ ansible_hostname }}

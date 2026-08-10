@@ -1,0 +1,496 @@
+---
+# Main tasks for Ops role
+
+- name: Include vars
+  include_vars: main.yml
+
+- name: Update apt cache
+  apt:
+    update_cache: yes
+    cache_valid_time: 3600
+
+- name: Install required packages
+  apt:
+    name: "{{ packages }}"
+    state: present
+
+# ==================== PROMETHEUS ====================
+
+- name: Create prometheus user
+  user:
+    name: prometheus
+    system: yes
+    shell: /sbin/nologin
+    create_home: no
+
+- name: Create prometheus directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: prometheus
+    group: prometheus
+    mode: '0755'
+  loop:
+    - /etc/prometheus
+    - /var/lib/prometheus
+    - /var/log/prometheus
+
+- name: Download Prometheus
+  get_url:
+    url: "https://github.com/prometheus/prometheus/releases/download/v2.47.0/prometheus-2.47.0.linux-amd64.tar.gz"
+    dest: /tmp/prometheus.tar.gz
+
+- name: Extract Prometheus
+  unarchive:
+    src: /tmp/prometheus.tar.gz
+    dest: /tmp/
+    remote_src: yes
+    creates: /tmp/prometheus-2.47.0.linux-amd64/prometheus
+
+- name: Install Prometheus binaries
+  copy:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    mode: '0755'
+    remote_src: yes
+  loop:
+    - { src: /tmp/prometheus-2.47.0.linux-amd64/prometheus, dest: /usr/local/bin/prometheus }
+    - { src: /tmp/prometheus-2.47.0.linux-amd64/promtool, dest: /usr/local/bin/promtool }
+
+- name: Install Prometheus consoles
+  copy:
+    src: /tmp/prometheus-2.47.0.linux-amd64/consoles/
+    dest: /etc/prometheus/consoles/
+    remote_src: yes
+    directory_mode: yes
+
+- name: Install Prometheus console_libraries
+  copy:
+    src: /tmp/prometheus-2.47.0.linux-amd64/console_libraries/
+    dest: /etc/prometheus/console_libraries/
+    remote_src: yes
+    directory_mode: yes
+
+- name: Configure Prometheus
+  template:
+    src: prometheus.yml.j2
+    dest: /etc/prometheus/prometheus.yml
+    owner: prometheus
+    group: prometheus
+    mode: '0644'
+  notify: restart prometheus
+
+- name: Configure Prometheus targets
+  template:
+    src: prometheus.targets.yml.j2
+    dest: /etc/prometheus/targets.yml
+    owner: prometheus
+    group: prometheus
+    mode: '0644'
+  notify: restart prometheus
+
+- name: Create Prometheus service
+  copy:
+    dest: /etc/systemd/system/prometheus.service
+    content: |
+      [Unit]
+      Description=Prometheus
+      After=network.target
+
+      [Service]
+      User=prometheus
+      Group=prometheus
+      Type=simple
+      ExecStart=/usr/local/bin/prometheus \
+        --config.file=/etc/prometheus/prometheus.yml \
+        --storage.tsdb.path=/var/lib/prometheus \
+        --web.console.templates=/etc/prometheus/consoles \
+        --web.console.libraries=/etc/prometheus/console_libraries \
+        --web.listen-address=:{{ monitoring.prometheus.port }}
+      Restart=always
+
+      [Install]
+      WantedBy=multi-user.target
+
+- name: Start Prometheus
+  systemd:
+    name: prometheus
+    state: started
+    enabled: yes
+    daemon_reload: yes
+
+# ==================== NODE EXPORTER ====================
+
+- name: Install Node Exporter
+  when: monitoring.node_exporter.enabled
+  block:
+    - name: Download Node Exporter
+      get_url:
+        url: https://github.com/prometheus/node_exporter/releases/download/v1.7.0/node_exporter-1.7.0.linux-amd64.tar.gz
+        dest: /tmp/node_exporter.tar.gz
+
+    - name: Extract Node Exporter
+      unarchive:
+        src: /tmp/node_exporter.tar.gz
+        dest: /tmp/
+        remote_src: yes
+        creates: /tmp/node_exporter-1.7.0.linux-amd64/node_exporter
+
+    - name: Install Node Exporter
+      copy:
+        src: /tmp/node_exporter-1.7.0.linux-amd64/node_exporter
+        dest: /usr/local/bin/node_exporter
+        mode: '0755'
+        remote_src: yes
+
+    - name: Create Node Exporter service
+      copy:
+        dest: /etc/systemd/system/node_exporter.service
+        content: |
+          [Unit]
+          Description=Node Exporter
+          After=network.target
+
+          [Service]
+          User=prometheus
+          Group=prometheus
+          Type=simple
+          ExecStart=/usr/local/bin/node_exporter --web.listen-address=:{{ monitoring.node_exporter.port }}
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Start Node Exporter
+      systemd:
+        name: node_exporter
+        state: started
+        enabled: yes
+        daemon_reload: yes
+
+# ==================== BLACKBOX EXPORTER ====================
+
+- name: Install Blackbox Exporter
+  when: monitoring.blackbox_exporter.enabled
+  block:
+    - name: Download Blackbox Exporter
+      get_url:
+        url: https://github.com/prometheus/blackbox_exporter/releases/download/v0.24.0/blackbox_exporter-0.24.0.linux-amd64.tar.gz
+        dest: /tmp/blackbox_exporter.tar.gz
+
+    - name: Extract Blackbox Exporter
+      unarchive:
+        src: /tmp/blackbox_exporter.tar.gz
+        dest: /tmp/
+        remote_src: yes
+
+    - name: Install Blackbox Exporter
+      copy:
+        src: /tmp/blackbox_exporter-0.24.0.linux-amd64/blackbox_exporter
+        dest: /usr/local/bin/blackbox_exporter
+        mode: '0755'
+        remote_src: yes
+
+    - name: Create Blackbox Exporter service
+      copy:
+        dest: /etc/systemd/system/blackbox_exporter.service
+        content: |
+          [Unit]
+          Description=Blackbox Exporter
+          After=network.target
+
+          [Service]
+          User=prometheus
+          Group=prometheus
+          Type=simple
+          ExecStart=/usr/local/bin/blackbox_exporter --web.listen-address=:{{ monitoring.blackbox_exporter.port }}
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Start Blackbox Exporter
+      systemd:
+        name: blackbox_exporter
+        state: started
+        enabled: yes
+        daemon_reload: yes
+
+# ==================== ALERTMANAGER ====================
+
+- name: Install Alertmanager
+  when: monitoring.alertmanager.enabled
+  block:
+    - name: Download Alertmanager
+      get_url:
+        url: https://github.com/prometheus/alertmanager/releases/download/v0.26.0/alertmanager-0.26.0.linux-amd64.tar.gz
+        dest: /tmp/alertmanager.tar.gz
+
+    - name: Extract Alertmanager
+      unarchive:
+        src: /tmp/alertmanager.tar.gz
+        dest: /tmp/
+        remote_src: yes
+
+    - name: Install Alertmanager
+      copy:
+        src: /tmp/alertmanager-0.26.0.linux-amd64/alertmanager
+        dest: /usr/local/bin/alertmanager
+        mode: '0755'
+        remote_src: yes
+
+    - name: Create Alertmanager config
+      template:
+        src: alertmanager.yml.j2
+        dest: /etc/prometheus/alertmanager.yml
+        owner: prometheus
+        group: prometheus
+        mode: '0644'
+
+    - name: Create Alertmanager service
+      copy:
+        dest: /etc/systemd/system/alertmanager.service
+        content: |
+          [Unit]
+          Description=Alertmanager
+          After=network.target
+
+          [Service]
+          User=prometheus
+          Group=prometheus
+          Type=simple
+          ExecStart=/usr/local/bin/alertmanager --config.file=/etc/prometheus/alertmanager.yml --web.listen-address=:{{ monitoring.alertmanager.port }}
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Start Alertmanager
+      systemd:
+        name: alertmanager
+        state: started
+        enabled: yes
+        daemon_reload: yes
+
+# ==================== GRAFANA ====================
+
+- name: Install Grafana
+  block:
+    - name: Add Grafana repository
+      apt_repository:
+        repo: "deb https://packages.grafana.com/oss/deb stable main"
+        state: present
+        update_cache: yes
+
+    - name: Add Grafana GPG key
+      apt_key:
+        url: https://packages.grafana.com/gpg.key
+        state: present
+
+    - name: Install Grafana
+      apt:
+        name: grafana
+        state: present
+
+    - name: Configure Grafana
+      template:
+        src: grafana-datasource.yml.j2
+        dest: /etc/grafana/provisioning/datasources/prometheus.yml
+        owner: grafana
+        group: grafana
+        mode: '0644'
+      notify: restart grafana
+
+    - name: Create Grafana dashboard directory
+      file:
+        path: /etc/grafana/provisioning/dashboards
+        state: directory
+        owner: grafana
+        group: grafana
+        mode: '0755'
+
+    - name: Configure Grafana dashboards
+      template:
+        src: grafana-dashboard.yml.j2
+        dest: /etc/grafana/provisioning/dashboards/default.yml
+        owner: grafana
+        group: grafana
+        mode: '0644'
+      notify: restart grafana
+
+    - name: Set Grafana admin password
+      shell: |
+        grafana-cli admin reset-admin-password {{ monitoring.grafana.admin_password }}
+      ignore_errors: yes
+
+    - name: Start Grafana
+      systemd:
+        name: grafana-server
+        state: started
+        enabled: yes
+        daemon_reload: yes
+
+# ==================== LOKI (Logs) ====================
+
+- name: Install Loki
+  when: monitoring.loki.enabled
+  block:
+    - name: Download Loki
+      get_url:
+        url: https://github.com/grafana/loki/releases/download/v2.9.0/loki-linux-amd64.zip
+        dest: /tmp/loki.zip
+
+    - name: Unzip Loki
+      unarchive:
+        src: /tmp/loki.zip
+        dest: /tmp/
+        remote_src: yes
+        creates: /tmp/loki-linux-amd64
+
+    - name: Install Loki
+      copy:
+        src: /tmp/loki-linux-amd64
+        dest: /usr/local/bin/loki
+        mode: '0755'
+        remote_src: yes
+
+    - name: Create Loki config
+      template:
+        src: loki-config.yml.j2
+        dest: /etc/loki/config.yml
+        mode: '0644'
+
+    - name: Create Loki service
+      copy:
+        dest: /etc/systemd/system/loki.service
+        content: |
+          [Unit]
+          Description=Loki
+          After=network.target
+
+          [Service]
+          User=prometheus
+          Group=prometheus
+          Type=simple
+          ExecStart=/usr/local/bin/loki -config.file=/etc/loki/config.yml
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Start Loki
+      systemd:
+        name: loki
+        state: started
+        enabled: yes
+        daemon_reload: yes
+
+# ==================== FLUENT BIT (Log Collector) ====================
+
+- name: Install Fluent Bit
+  when: monitoring.fluent_bit.enabled
+  block:
+    - name: Install Fluent Bit from repository
+      shell: |
+        curl -fsSL https://packages.fluentbit.io/fluentbit.key | gpg --dearmor -o /usr/share/keyrings/fluentbit-archive-keyring.gpg
+        echo "deb [signed-by=/usr/share/keyrings/fluentbit-archive-keyring.gpg] https://packages.fluentbit.io/ubuntu jammy main" > /etc/apt/sources.list.d/fluentbit.list
+        apt-get update
+        apt-get install -y fluent-bit
+
+    - name: Configure Fluent Bit
+      template:
+        src: fluent-bit.conf.j2
+        dest: /etc/fluent-bit/fluent-bit.conf
+        mode: '0644'
+      notify: restart fluent-bit
+
+    - name: Start Fluent Bit
+      systemd:
+        name: fluent-bit
+        state: started
+        enabled: yes
+
+# ==================== BACKUP SCRIPTS ====================
+
+- name: Create backup directory
+  file:
+    path: "{{ backup.backup_dir }}"
+    state: directory
+    mode: '0755'
+
+- name: Create backup script
+  when: backup.enabled
+  template:
+    src: backup.sh.j2
+    dest: /usr/local/bin/backup.sh
+    mode: '0755'
+
+- name: Setup backup cron job
+  when: backup.enabled
+  cron:
+    name: "Database backup"
+    minute: "{{ backup.schedule.split()[1] | default('0') }}"
+    hour: "{{ backup.schedule.split()[0] | default('2') }}"
+    job: "/usr/local/bin/backup.sh > /var/log/backup.log 2>&1"
+    state: present
+
+# ==================== NGINX (Reverse Proxy) ====================
+
+- name: Install Nginx
+  apt:
+    name: nginx
+    state: present
+
+- name: Configure Nginx for Ops
+  template:
+    src: nginx.conf.j2
+    dest: /etc/nginx/sites-available/ops
+    mode: '0644'
+  notify: restart nginx
+
+- name: Enable Nginx site
+  file:
+    src: /etc/nginx/sites-available/ops
+    dest: /etc/nginx/sites-enabled/ops
+    state: link
+  notify: restart nginx
+
+- name: Remove default Nginx site
+  file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  notify: restart nginx
+
+# ==================== UFW FIREWALL ====================
+
+- name: Configure UFW
+  ufw:
+    rule: allow
+    port: "{{ item }}"
+    proto: tcp
+  loop:
+    - '22'
+    - '80'
+    - '3000'
+    - '9090'
+    - '9093'
+    - '9100'
+    - '9115'
+
+- name: Enable UFW
+  ufw:
+    state: enabled
+    policy: deny
+
+# ==================== FINAL ====================
+
+- name: Display completion
+  debug:
+    msg: |
+      ╔══════════════════════════════════════════════════════════════╗
+      ║           ✅ OPS SERVER CONFIGURED SUCCESSFULLY!            ║
+      ╚══════════════════════════════════════════════════════════════╝
+      
+      📊 Grafana: http://192.168.56.40:3000 (user: admin)
+      📊 Prometheus: http://192.168.56.40:9090
+      🔔 Alertmanager: http://192.168.56.40:9093
+      📝 Loki: http://192.168.56.40:3100
+      📦 Backups: {{ backup.backup_dir }}
+      🔑 SSH: ssh -p 2225 vagrant@localhost
+      ══════════════════════════════════════════════════════════════

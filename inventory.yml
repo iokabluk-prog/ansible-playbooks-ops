@@ -1,0 +1,39 @@
+all:
+  children:
+    perimeter_group:
+      hosts:
+        perimeter:
+          ansible_host: 192.168.56.18
+          ansible_user: vagrant
+          ansible_ssh_pass: vagrant
+          ansible_become_pass: vagrant
+          ansible_python_interpreter: /usr/bin/python3
+          
+    app_group:
+      hosts:
+        app-main:
+          ansible_host: 192.168.56.20
+          ansible_user: vagrant
+          ansible_ssh_pass: vagrant
+          ansible_become_pass: vagrant
+          ansible_python_interpreter: /usr/bin/python3
+          
+        app-stby:
+          ansible_host: 192.168.56.30
+          ansible_user: vagrant
+          ansible_ssh_pass: vagrant
+          ansible_become_pass: vagrant
+          ansible_python_interpreter: /usr/bin/python3
+          
+    ops_group:
+      hosts:
+        ops:
+          ansible_host: 192.168.56.40
+          ansible_user: vagrant
+          ansible_ssh_pass: vagrant
+          ansible_become_pass: vagrant
+          ansible_python_interpreter: /usr/bin/python3
+
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no'

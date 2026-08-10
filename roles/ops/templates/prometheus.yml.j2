@@ -1,0 +1,106 @@
+---
+# Prometheus Configuration
+
+global:
+  scrape_interval: {{ monitoring.prometheus.scrape_interval }}
+  evaluation_interval: {{ monitoring.prometheus.evaluation_interval }}
+  external_labels:
+    environment: production
+    datacenter: local
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - 'localhost:{{ monitoring.alertmanager.port }}'
+
+rule_files:
+  - /etc/prometheus/rules/*.rules
+
+scrape_configs:
+  # Prometheus self
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:{{ monitoring.prometheus.port }}']
+
+  # Node Exporter - Ops
+  - job_name: 'node_ops'
+    static_configs:
+      - targets: ['localhost:{{ monitoring.node_exporter.port }}']
+        labels:
+          instance: ops
+          role: monitoring
+
+  # Node Exporter - App Main
+  - job_name: 'node_app_main'
+    static_configs:
+      - targets: ['192.168.56.20:{{ monitoring.node_exporter.port }}']
+        labels:
+          instance: app-main
+          role: application
+
+  # Node Exporter - App Stby
+  - job_name: 'node_app_stby'
+    static_configs:
+      - targets: ['192.168.56.30:{{ monitoring.node_exporter.port }}']
+        labels:
+          instance: app-stby
+          role: application
+
+  # Node Exporter - Perimeter
+  - job_name: 'node_perimeter'
+    static_configs:
+      - targets: ['192.168.56.18:{{ monitoring.node_exporter.port }}']
+        labels:
+          instance: perimeter
+          role: gateway
+
+  # MySQL Exporter - App Main
+  - job_name: 'mysql_app_main'
+    static_configs:
+      - targets: ['192.168.56.20:9104']
+        labels:
+          instance: app-main
+          role: database
+
+  # MySQL Exporter - App Stby
+  - job_name: 'mysql_app_stby'
+    static_configs:
+      - targets: ['192.168.56.30:9104']
+        labels:
+          instance: app-stby
+          role: database
+
+  # Blackbox Exporter - HTTP checks
+  - job_name: 'blackbox_http'
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets:
+          - http://192.168.56.18
+          - http://192.168.56.20
+          - http://192.168.56.30
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: 'localhost:{{ monitoring.blackbox_exporter.port }}'
+
+  # Blackbox Exporter - HTTPS checks
+  - job_name: 'blackbox_https'
+    metrics_path: /probe
+    params:
+      module: [http_2xx]
+    static_configs:
+      - targets:
+          - https://192.168.56.18
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [__param_target]
+        target_label: instance
+      - target_label: __address__
+        replacement: 'localhost:{{ monitoring.blackbox_exporter.port }}'

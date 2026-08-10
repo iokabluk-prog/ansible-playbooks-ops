@@ -1,0 +1,71 @@
+---
+# Специфичные переменные для Ops сервера
+
+# Настройки мониторинга
+monitoring:
+  # Prometheus
+  prometheus:
+    port: 9090
+    scrape_interval: "15s"
+    evaluation_interval: "15s"
+    retention_time: "30d"
+    storage_path: "/var/lib/prometheus"
+    
+  # Node Exporter
+  node_exporter:
+    port: 9100
+    enabled: true
+    
+  # Blackbox Exporter
+  blackbox_exporter:
+    port: 9115
+    enabled: true
+    
+  # Alertmanager
+  alertmanager:
+    port: 9093
+    enabled: true
+    
+  # Grafana
+  grafana:
+    port: 3000
+    admin_user: "admin"
+    admin_password: "SecureGrafana123!"
+    domain: "ops.local"
+    
+  # Loki (логи)
+  loki:
+    port: 3100
+    enabled: true
+    
+  # Fluent Bit (сбор логов)
+  fluent_bit:
+    enabled: true
+
+# Настройки бэкапов
+backup:
+  enabled: true
+  schedule: "0 2 * * *"  # Каждый день в 2:00
+  retention_days: 30
+  backup_dir: "/var/backups"
+  servers:
+    - host: "192.168.56.20"
+      name: "app-main"
+      user: "vagrant"
+      databases:
+        - "app_db"
+    - host: "192.168.56.30"
+      name: "app-stby"
+      user: "vagrant"
+      databases:
+        - "app_db"
+
+# Настройки логов
+logging:
+  log_dir: "/var/log/ops"
+  retention_days: 30
+  
+# Настройки NGINX
+nginx:
+  server_name: ops.local
+  port: 80
