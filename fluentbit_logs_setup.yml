@@ -116,7 +116,7 @@
               Add           server_role {{ group_names | join(',') }}
 
           # ========================================
-          # OUTPUT: LOKI (БЕЗ BATCHWAIT И BATCHSIZE)
+          # OUTPUT: LOKI (С line_format)
           # ========================================
           [OUTPUT]
               Name          loki
@@ -124,7 +124,7 @@
               Host          {{ loki_host }}
               Port          {{ loki_port }}
               Labels        job=fluentbit, host={{ ansible_hostname }}, type=$TAG
-              LineFormat    json
+              line_format   json
 
     # ============================================================
     # 3. ИСПРАВЛЕНИЕ SERVICE ФАЙЛА
