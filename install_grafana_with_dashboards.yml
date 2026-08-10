@@ -1,0 +1,336 @@
+---
+- name: Install Grafana and create dashboards
+  hosts: ops
+  become: yes
+  gather_facts: yes
+
+  tasks:
+    # ============================================================
+    # 1. УСТАНОВКА GRAFANA
+    # ============================================================
+    - name: Download Grafana .deb package
+      get_url:
+        url: https://dl.grafana.com/oss/release/grafana_9.5.2_amd64.deb
+        dest: /tmp/grafana.deb
+        timeout: 120
+      register: download_result
+      retries: 3
+      delay: 10
+      until: download_result is success
+
+    - name: Install Grafana
+      apt:
+        deb: /tmp/grafana.deb
+        state: present
+
+    - name: Install dependencies if needed
+      apt:
+        name: libc6
+        state: present
+
+    # ============================================================
+    # 2. НАСТРОЙКА DATASOURCE
+    # ============================================================
+    - name: Create Grafana datasource directory
+      file:
+        path: /etc/grafana/provisioning/datasources
+        state: directory
+        owner: grafana
+        group: grafana
+        mode: '0755'
+
+    - name: Configure Prometheus datasource
+      copy:
+        dest: /etc/grafana/provisioning/datasources/prometheus.yml
+        content: |
+          apiVersion: 1
+          datasources:
+            - name: Prometheus
+              type: prometheus
+              access: proxy
+              url: http://localhost:9090
+              isDefault: true
+        owner: grafana
+        group: grafana
+        mode: '0644'
+
+    # ============================================================
+    # 3. НАСТРОЙКА DASHBOARDS
+    # ============================================================
+    - name: Create Grafana dashboards directory
+      file:
+        path: /etc/grafana/provisioning/dashboards
+        state: directory
+        owner: grafana
+        group: grafana
+        mode: '0755'
+
+    - name: Create dashboard config for provisioning
+      copy:
+        dest: /etc/grafana/provisioning/dashboards/dashboards.yml
+        content: |
+          apiVersion: 1
+          providers:
+            - name: 'default'
+              orgId: 1
+              folder: ''
+              type: file
+              disableDeletion: false
+              updateIntervalSeconds: 60
+              allowUiUpdates: true
+              options:
+                path: /etc/grafana/dashboards
+        owner: grafana
+        group: grafana
+        mode: '0644'
+
+    - name: Create dashboard directory
+      file:
+        path: /etc/grafana/dashboards
+        state: directory
+        owner: grafana
+        group: grafana
+        mode: '0755'
+
+    # ============================================================
+    # 4. DASHBOARD JSON
+    # ============================================================
+    - name: Create system metrics dashboard for all servers
+      copy:
+        dest: /etc/grafana/dashboards/system_metrics.json
+        content: |
+          {
+            "title": "System Metrics - All Servers",
+            "uid": "system_metrics",
+            "version": 1,
+            "tags": ["system", "monitoring"],
+            "timezone": "browser",
+            "schemaVersion": 16,
+            "refresh": "30s",
+            "panels": [
+              {
+                "id": 1,
+                "title": "CPU Usage - Perimeter",
+                "type": "timeseries",
+                "targets": [
+                  {
+                    "expr": "100 - (avg(rate(node_cpu_seconds_total{instance=\"perimeter\", mode=\"idle\"}[5m])) * 100)",
+                    "legendFormat": "Perimeter CPU",
+                    "refId": "A"
+                  }
+                ],
+                "fieldConfig": {
+                  "defaults": {
+                    "unit": "percent",
+                    "min": 0,
+                    "max": 100
+                  }
+                },
+                "gridPos": {"h": 8, "w": 6, "x": 0, "y": 0}
+              },
+              {
+                "id": 2,
+                "title": "CPU Usage - App-Main",
+                "type": "timeseries",
+                "targets": [
+                  {
+                    "expr": "100 - (avg(rate(node_cpu_seconds_total{instance=\"app-main\", mode=\"idle\"}[5m])) * 100)",
+                    "legendFormat": "App-Main CPU",
+                    "refId": "A"
+                  }
+                ],
+                "fieldConfig": {
+                  "defaults": {
+                    "unit": "percent",
+                    "min": 0,
+                    "max": 100
+                  }
+                },
+                "gridPos": {"h": 8, "w": 6, "x": 6, "y": 0}
+              },
+              {
+                "id": 3,
+                "title": "CPU Usage - App-Stby",
+                "type": "timeseries",
+                "targets": [
+                  {
+                    "expr": "100 - (avg(rate(node_cpu_seconds_total{instance=\"app-stby\", mode=\"idle\"}[5m])) * 100)",
+                    "legendFormat": "App-Stby CPU",
+                    "refId": "A"
+                  }
+                ],
+                "fieldConfig": {
+                  "defaults": {
+                    "unit": "percent",
+                    "min": 0,
+                    "max": 100
+                  }
+                },
+                "gridPos": {"h": 8, "w": 6, "x": 12, "y": 0}
+              },
+              {
+                "id": 4,
+                "title": "CPU Usage - Ops",
+                "type": "timeseries",
+                "targets": [
+                  {
+                    "expr": "100 - (avg(rate(node_cpu_seconds_total{instance=\"ops\", mode=\"idle\"}[5m])) * 100)",
+                    "legendFormat": "Ops CPU",
+                    "refId": "A"
+                  }
+                ],
+                "fieldConfig": {
+                  "defaults": {
+                    "unit": "percent",
+                    "min": 0,
+                    "max": 100
+                  }
+                },
+                "gridPos": {"h": 8, "w": 6, "x": 18, "y": 0}
+              },
+              {
+                "id": 5,
+                "title": "Memory Usage - All Servers",
+                "type": "timeseries",
+                "targets": [
+                  {
+                    "expr": "100 - ((node_memory_MemAvailable_bytes{instance=\"perimeter\"} / node_memory_MemTotal_bytes{instance=\"perimeter\"}) * 100)",
+                    "legendFormat": "Perimeter",
+                    "refId": "A"
+                  },
+                  {
+                    "expr": "100 - ((node_memory_MemAvailable_bytes{instance=\"app-main\"} / node_memory_MemTotal_bytes{instance=\"app-main\"}) * 100)",
+                    "legendFormat": "App-Main",
+                    "refId": "B"
+                  },
+                  {
+                    "expr": "100 - ((node_memory_MemAvailable_bytes{instance=\"app-stby\"} / node_memory_MemTotal_bytes{instance=\"app-stby\"}) * 100)",
+                    "legendFormat": "App-Stby",
+                    "refId": "C"
+                  },
+                  {
+                    "expr": "100 - ((node_memory_MemAvailable_bytes{instance=\"ops\"} / node_memory_MemTotal_bytes{instance=\"ops\"}) * 100)",
+                    "legendFormat": "Ops",
+                    "refId": "D"
+                  }
+                ],
+                "fieldConfig": {
+                  "defaults": {
+                    "unit": "percent",
+                    "min": 0,
+                    "max": 100
+                  }
+                },
+                "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}
+              },
+              {
+                "id": 6,
+                "title": "Disk Usage - All Servers",
+                "type": "timeseries",
+                "targets": [
+                  {
+                    "expr": "100 - ((node_filesystem_avail_bytes{instance=\"perimeter\", mountpoint=\"/\"} / node_filesystem_size_bytes{instance=\"perimeter\", mountpoint=\"/\"}) * 100)",
+                    "legendFormat": "Perimeter",
+                    "refId": "A"
+                  },
+                  {
+                    "expr": "100 - ((node_filesystem_avail_bytes{instance=\"app-main\", mountpoint=\"/\"} / node_filesystem_size_bytes{instance=\"app-main\", mountpoint=\"/\"}) * 100)",
+                    "legendFormat": "App-Main",
+                    "refId": "B"
+                  },
+                  {
+                    "expr": "100 - ((node_filesystem_avail_bytes{instance=\"app-stby\", mountpoint=\"/\"} / node_filesystem_size_bytes{instance=\"app-stby\", mountpoint=\"/\"}) * 100)",
+                    "legendFormat": "App-Stby",
+                    "refId": "C"
+                  },
+                  {
+                    "expr": "100 - ((node_filesystem_avail_bytes{instance=\"ops\", mountpoint=\"/\"} / node_filesystem_size_bytes{instance=\"ops\", mountpoint=\"/\"}) * 100)",
+                    "legendFormat": "Ops",
+                    "refId": "D"
+                  }
+                ],
+                "fieldConfig": {
+                  "defaults": {
+                    "unit": "percent",
+                    "min": 0,
+                    "max": 100
+                  }
+                },
+                "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8}
+              }
+            ]
+          }
+        owner: grafana
+        group: grafana
+        mode: '0644'
+
+    # ============================================================
+    # 5. ЗАПУСК GRAFANA
+    # ============================================================
+    - name: Start and enable Grafana
+      systemd:
+        name: grafana-server
+        state: started
+        enabled: yes
+        daemon_reload: yes
+
+    - name: Wait for Grafana to start
+      wait_for:
+        port: 3000
+        timeout: 30
+
+    - name: Restart Grafana to apply dashboards
+      systemd:
+        name: grafana-server
+        state: restarted
+
+    - name: Wait for Grafana to restart
+      wait_for:
+        port: 3000
+        timeout: 30
+        delay: 5
+
+    # ============================================================
+    # 6. ПРОВЕРКА
+    # ============================================================
+    - name: Check Grafana status
+      command: systemctl status grafana-server --no-pager
+      register: grafana_status
+      changed_when: false
+
+    - name: Display Grafana info
+      debug:
+        msg: |
+          ╔══════════════════════════════════════════════════════════════╗
+          ║           ✅ GRAFANA INSTALLED SUCCESSFULLY!               ║
+          ╚══════════════════════════════════════════════════════════════╝
+          
+          📊 Grafana: http://192.168.56.40:3000
+          👤 Username: admin
+          🔑 Password: admin
+          
+          📋 Dashboards:
+          - System Metrics - All Servers
+            - CPU Usage (per server)
+            - Memory Usage (all servers)
+            - Disk Usage (all servers)
+          
+          ══════════════════════════════════════════════════════════════
+
+    - name: Clean up
+      file:
+        path: /tmp/grafana.deb
+        state: absent
+
+    - name: Final check - Grafana is ready
+      uri:
+        url: http://localhost:3000/api/health
+        return_content: yes
+      register: grafana_health
+      until: grafana_health.status == 200
+      retries: 5
+      delay: 2
+
+    - name: Display Grafana health
+      debug:
+        msg: "✅ Grafana health: {{ grafana_health.content }}"
