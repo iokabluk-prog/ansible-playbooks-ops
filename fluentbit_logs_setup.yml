@@ -1,432 +1,185 @@
----
-- name: Install and configure Fluent Bit on all servers
-  hosts: perimeter,app-main,app-stby
-  become: yes
-  gather_facts: yes
-
-  vars:
-    loki_host: "192.168.56.40"
-    loki_port: "3100"
-
-  tasks:
-    # ============================================================
-    # 1. УСТАНОВКА FLUENT BIT (ОФИЦИАЛЬНЫЙ СКРИПТ)
-    # ============================================================
-    - name: Install Fluent Bit via official script
-      shell: |
-        curl -fsSL https://raw.githubusercontent.com/fluent/fluent-bit/master/install.sh | sh
-      args:
-        creates: /opt/fluent-bit/bin/fluent-bit
-      register: fluentbit_install
-      ignore_errors: yes
-
-    - name: Fix dpkg configuration if needed
-      shell: |
-        sudo dpkg --configure -a
-        sudo apt-get install -f -y
-      when: fluentbit_install is failed
-      ignore_errors: yes
-
-    - name: Reinstall Fluent Bit if dpkg failed
-      shell: |
-        sudo apt-get remove --purge fluent-bit -y
-        curl -fsSL https://raw.githubusercontent.com/fluent/fluent-bit/master/install.sh | sh
-      when: fluentbit_install is failed
-      ignore_errors: yes
-
-    - name: Create fluent-bit directories
-      file:
-        path: "{{ item }}"
-        state: directory
-        mode: '0755'
-      loop:
-        - /etc/fluent-bit
-        - /var/log/fluent-bit
-
-    # ============================================================
-    # 2. НАСТРОЙКА FLUENT BIT С Read_From_Head
-    # ============================================================
-    - name: Create Fluent Bit parser config
-      copy:
-        dest: /etc/fluent-bit/parsers.conf
-        content: |
-          [PARSER]
-              Name   nginx
-              Format regex
-              Regex  ^(?<remote>[^ ]*) (?<host>[^ ]*) (?<user>[^ ]*) \[(?<time>[^\]]*)\] "(?<method>\S+)(?: +(?<path>[^\"]*?)(?: +\S*)?)?" (?<code>[^ ]*) (?<size>[^ ]*)(?: "(?<referer>[^\"]*)" "(?<agent>[^\"]*)")?$
-              Time_Key time
-              Time_Format %d/%b/%Y:%H:%M:%S %z
-
-          [PARSER]
-              Name   mysql
-              Format regex
-              Regex  ^(?<time>[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]+Z) (?<level>[A-Z]+) (?<message>.*)$
-              Time_Key time
-              Time_Format %Y-%m-%dT%H:%M:%S.%LZ
-
-    - name: Create Fluent Bit main config (с Read_From_Head)
-      copy:
-        dest: /etc/fluent-bit/fluent-bit.conf
-        content: |
-          [SERVICE]
-              Flush         1
-              Log_Level     info
-              Daemon        off
-              Parsers_File  /etc/fluent-bit/parsers.conf
-              HTTP_Server   On
-              HTTP_Listen   0.0.0.0
-              HTTP_Port     2020
-
-          # ========================================
-          # INPUT: NGINX LOGS
-          # ========================================
-          [INPUT]
-              Name              tail
-              Path              /var/log/nginx/access.log
-              Parser            nginx
-              Tag               nginx_access
-              Path_Key          filename
-              Read_From_Head    true
-              Refresh_Interval  1
-
-          [INPUT]
-              Name              tail
-              Path              /var/log/nginx/error.log
-              Parser            nginx
-              Tag               nginx_error
-              Path_Key          filename
-              Read_From_Head    true
-              Refresh_Interval  1
-
-          # ========================================
-          # INPUT: MYSQL LOGS (only on app-main and app-stby)
-          # ========================================
-          [INPUT]
-              Name              tail
-              Path              /var/log/mysql/error.log
-              Parser            mysql
-              Tag               mysql_error
-              Path_Key          filename
-              DB                /var/log/fluent-bit/mysql.db
-              Read_From_Head    true
-              Refresh_Interval  1
-
-          # ========================================
-          # FILTER: ADD HOSTNAME
-          # ========================================
-          [FILTER]
-              Name              modify
-              Match             *
-              Add               hostname {{ ansible_hostname }}
-              Add               environment production
-              Add               server_role {{ group_names | join(',') }}
-
-          # ========================================
-          # OUTPUT: LOKI
-          # ========================================
-          [OUTPUT]
-              Name              loki
-              Match             *
-              Host              {{ loki_host }}
-              Port              {{ loki_port }}
-              Labels            job=fluentbit, host={{ ansible_hostname }}, type=$TAG
-              line_format       json
-
-    # ============================================================
-    # 3. ИСПРАВЛЕНИЕ SERVICE ФАЙЛА
-    # ============================================================
-    - name: Fix fluent-bit service file (remove double slash)
-      shell: |
-        sed -i 's|-c //|-c /|g' /lib/systemd/system/fluent-bit.service
-        systemctl daemon-reload
-      ignore_errors: yes
-
-    # ============================================================
-    # 4. ЗАПУСК FLUENT BIT
-    # ============================================================
-    - name: Start and enable Fluent Bit
-      systemd:
-        name: fluent-bit
-        state: started
-        enabled: yes
-        daemon_reload: yes
-
-    - name: Wait for Fluent Bit to start
-      wait_for:
-        port: 2020
-        timeout: 30
-      ignore_errors: yes
-
-    - name: Check Fluent Bit status
-      command: systemctl status fluent-bit --no-pager
-      register: fluentbit_status
-      changed_when: false
-      ignore_errors: yes
-
-    - name: Show Fluent Bit status
-      debug:
-        var: fluentbit_status.stdout_lines
-
-    - name: Allow Fluent Bit metrics port in UFW (if active)
-      ufw:
-        rule: allow
-        port: '2020'
-        proto: tcp
-      ignore_errors: yes
-
-    - name: Display Fluent Bit status
-      debug:
-        msg: |
-          ✅ Fluent Bit installed on {{ ansible_hostname }}
-          📊 Metrics: http://{{ ansible_default_ipv4.address }}:2020
-
-- name: Configure Grafana Loki Dashboard for Logs
-  hosts: ops
-  become: yes
-  gather_facts: yes
-
-  tasks:
-    # ============================================================
-    # 1. ПРОВЕРКА LOKI
-    # ============================================================
-    - name: Check Loki is running
-      uri:
-        url: http://localhost:3100/ready
-        status_code: 200
-      register: loki_check
-      ignore_errors: yes
-
-    - name: Fail if Loki is not running
-      fail:
-        msg: "Loki is not running on ops server. Please install Loki first."
-      when: loki_check.status != 200
-
-    # ============================================================
-    # 2. СОЗДАНИЕ DASHBOARD ДЛЯ ЛОГОВ
-    # ============================================================
-    - name: Create Grafana dashboards directory
-      file:
-        path: /etc/grafana/provisioning/dashboards
-        state: directory
-        owner: grafana
-        group: grafana
-        mode: '0755'
-
-    - name: Create dashboard config for provisioning
-      copy:
-        dest: /etc/grafana/provisioning/dashboards/dashboards.yml
-        content: |
-          apiVersion: 1
-          providers:
-            - name: 'default'
-              orgId: 1
-              folder: ''
-              type: file
-              disableDeletion: false
-              updateIntervalSeconds: 60
-              allowUiUpdates: true
-              options:
-                path: /etc/grafana/dashboards
-        owner: grafana
-        group: grafana
-        mode: '0644'
-
-    - name: Create dashboard directory
-      file:
-        path: /etc/grafana/dashboards
-        state: directory
-        owner: grafana
-        group: grafana
-        mode: '0755'
-
-    - name: Create comprehensive logs dashboard
-      copy:
-        dest: /etc/grafana/dashboards/logs_dashboard.json
-        content: |
+- name: Create comprehensive logs dashboard
+  copy:
+    dest: /etc/grafana/dashboards/logs_dashboard.json
+    content: |
+      {
+        "title": "Comprehensive Logs Dashboard",
+        "uid": "logs_dashboard",
+        "version": 1,
+        "tags": ["logs", "nginx", "mysql", "fluentbit"],
+        "timezone": "browser",
+        "schemaVersion": 16,
+        "refresh": "30s",
+        "panels": [
           {
-            "title": "Comprehensive Logs Dashboard",
-            "uid": "logs_dashboard",
-            "version": 1,
-            "tags": ["logs", "nginx", "mysql", "fluentbit"],
-            "timezone": "browser",
-            "schemaVersion": 16,
-            "refresh": "30s",
-            "panels": [
+            "id": 1,
+            "title": "NGINX Access Logs - Perimeter",
+            "type": "logs",
+            "targets": [
               {
-                "id": 1,
-                "title": "NGINX Access Logs - Perimeter",
-                "type": "logs",
-                "targets": [
-                  {
-                    "expr": "{host=\"perimeter\", type=\"nginx_access\"}",
-                    "refId": "A"
-                  }
-                ],
-                "gridPos": {"h": 12, "w": 12, "x": 0, "y": 0}
-              },
-              {
-                "id": 2,
-                "title": "NGINX Access Logs - App-Main",
-                "type": "logs",
-                "targets": [
-                  {
-                    "expr": "{host=\"app-main\", type=\"nginx_access\"}",
-                    "refId": "A"
-                  }
-                ],
-                "gridPos": {"h": 12, "w": 12, "x": 12, "y": 0}
-              },
-              {
-                "id": 3,
-                "title": "NGINX Access Logs - App-Stby",
-                "type": "logs",
-                "targets": [
-                  {
-                    "expr": "{host=\"app-stby\", type=\"nginx_access\"}",
-                    "refId": "A"
-                  }
-                ],
-                "gridPos": {"h": 12, "w": 12, "x": 0, "y": 12}
-              },
-              {
-                "id": 4,
-                "title": "NGINX Error Logs - All Servers",
-                "type": "logs",
-                "targets": [
-                  {
-                    "expr": "{type=\"nginx_error\"}",
-                    "refId": "A"
-                  }
-                ],
-                "gridPos": {"h": 12, "w": 12, "x": 12, "y": 12}
-              },
-              {
-                "id": 5,
-                "title": "MySQL Error Logs - App-Main",
-                "type": "logs",
-                "targets": [
-                  {
-                    "expr": "{host=\"app-main\", type=\"mysql_error\"}",
-                    "refId": "A"
-                  }
-                ],
-                "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24}
-              },
-              {
-                "id": 6,
-                "title": "MySQL Error Logs - App-Stby",
-                "type": "logs",
-                "targets": [
-                  {
-                    "expr": "{host=\"app-stby\", type=\"mysql_error\"}",
-                    "refId": "A"
-                  }
-                ],
-                "gridPos": {"h": 8, "w": 12, "x": 12, "y": 24}
-              },
-              {
-                "id": 7,
-                "title": "Log Volume - All Servers",
-                "type": "timeseries",
-                "targets": [
-                  {
-                    "expr": "count_over_time({type=~\"nginx_access|nginx_error|mysql_error\"}[1m])",
-                    "legendFormat": "Logs per minute",
-                    "refId": "A"
-                  }
-                ],
-                "fieldConfig": {
-                  "defaults": {
-                    "unit": "short"
-                  }
-                },
-                "gridPos": {"h": 8, "w": 12, "x": 0, "y": 32}
-              },
-              {
-                "id": 8,
-                "title": "Logs by Host",
-                "type": "piechart",
-                "targets": [
-                  {
-                    "expr": "count_over_time({type=~\"nginx_access|nginx_error|mysql_error\"}[5m])",
-                    "legendFormat": "host",
-                    "refId": "A"
-                  }
-                ],
-                "gridPos": {"h": 8, "w": 12, "x": 12, "y": 32}
+                "expr": "{host=\"perimeter\", type=\"nginx_access\"}",
+                "refId": "A",
+                "datasource": {
+                  "type": "loki",
+                  "uid": "loki"
+                }
               }
-            ]
+            ],
+            "datasource": {
+              "type": "loki",
+              "uid": "loki"
+            },
+            "gridPos": {"h": 12, "w": 12, "x": 0, "y": 0}
+          },
+          {
+            "id": 2,
+            "title": "NGINX Access Logs - App-Main",
+            "type": "logs",
+            "targets": [
+              {
+                "expr": "{host=\"app-main\", type=\"nginx_access\"}",
+                "refId": "A",
+                "datasource": {
+                  "type": "loki",
+                  "uid": "loki"
+                }
+              }
+            ],
+            "datasource": {
+              "type": "loki",
+              "uid": "loki"
+            },
+            "gridPos": {"h": 12, "w": 12, "x": 12, "y": 0}
+          },
+          {
+            "id": 3,
+            "title": "NGINX Access Logs - App-Stby",
+            "type": "logs",
+            "targets": [
+              {
+                "expr": "{host=\"app-stby\", type=\"nginx_access\"}",
+                "refId": "A",
+                "datasource": {
+                  "type": "loki",
+                  "uid": "loki"
+                }
+              }
+            ],
+            "datasource": {
+              "type": "loki",
+              "uid": "loki"
+            },
+            "gridPos": {"h": 12, "w": 12, "x": 0, "y": 12}
+          },
+          {
+            "id": 4,
+            "title": "NGINX Error Logs - All Servers",
+            "type": "logs",
+            "targets": [
+              {
+                "expr": "{type=\"nginx_error\"}",
+                "refId": "A",
+                "datasource": {
+                  "type": "loki",
+                  "uid": "loki"
+                }
+              }
+            ],
+            "datasource": {
+              "type": "loki",
+              "uid": "loki"
+            },
+            "gridPos": {"h": 12, "w": 12, "x": 12, "y": 12}
+          },
+          {
+            "id": 5,
+            "title": "MySQL Error Logs - App-Main",
+            "type": "logs",
+            "targets": [
+              {
+                "expr": "{host=\"app-main\", type=\"mysql_error\"}",
+                "refId": "A",
+                "datasource": {
+                  "type": "loki",
+                  "uid": "loki"
+                }
+              }
+            ],
+            "datasource": {
+              "type": "loki",
+              "uid": "loki"
+            },
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 24}
+          },
+          {
+            "id": 6,
+            "title": "MySQL Error Logs - App-Stby",
+            "type": "logs",
+            "targets": [
+              {
+                "expr": "{host=\"app-stby\", type=\"mysql_error\"}",
+                "refId": "A",
+                "datasource": {
+                  "type": "loki",
+                  "uid": "loki"
+                }
+              }
+            ],
+            "datasource": {
+              "type": "loki",
+              "uid": "loki"
+            },
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 24}
+          },
+          {
+            "id": 7,
+            "title": "Log Volume - All Servers",
+            "type": "timeseries",
+            "targets": [
+              {
+                "expr": "count_over_time({type=~\"nginx_access|nginx_error|mysql_error\"}[1m])",
+                "legendFormat": "Logs per minute",
+                "refId": "A",
+                "datasource": {
+                  "type": "loki",
+                  "uid": "loki"
+                }
+              }
+            ],
+            "datasource": {
+              "type": "loki",
+              "uid": "loki"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "short"
+              }
+            },
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 32}
+          },
+          {
+            "id": 8,
+            "title": "Logs by Host",
+            "type": "piechart",
+            "targets": [
+              {
+                "expr": "count_over_time({type=~\"nginx_access|nginx_error|mysql_error\"}[5m])",
+                "legendFormat": "host",
+                "refId": "A",
+                "datasource": {
+                  "type": "loki",
+                  "uid": "loki"
+                }
+              }
+            ],
+            "datasource": {
+              "type": "loki",
+              "uid": "loki"
+            },
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 32}
           }
-        owner: grafana
-        group: grafana
-        mode: '0644'
-
-    # ============================================================
-    # 3. ПРОВЕРКА LOKI DATASOURCE
-    # ============================================================
-    - name: Check if Loki datasource exists in Grafana
-      uri:
-        url: http://localhost:3000/api/datasources
-        user: admin
-        password: admin
-        force_basic_auth: yes
-        status_code: 200
-      register: datasources
-      ignore_errors: yes
-
-    - name: Add Loki datasource if missing
-      uri:
-        url: http://localhost:3000/api/datasources
-        method: POST
-        user: admin
-        password: admin
-        force_basic_auth: yes
-        body_format: json
-        body:
-          name: Loki
-          type: loki
-          access: proxy
-          url: http://localhost:3100
-          isDefault: false
-          jsonData:
-            maxLines: 1000
-        status_code: 200
-      when: datasources is defined and "'Loki' not in datasources.content"
-      ignore_errors: yes
-
-    - name: Display dashboard info
-      debug:
-        msg: |
-          ╔══════════════════════════════════════════════════════════════╗
-          ║           ✅ LOGS COLLECTION CONFIGURED SUCCESSFULLY!      ║
-          ╚══════════════════════════════════════════════════════════════╝
-          
-          📊 Fluent Bit installed on:
-          - Perimeter
-          - App-Main
-          - App-Stby
-          
-          📊 Loki: http://192.168.56.40:3100
-          
-          📋 Grafana Dashboard:
-          - URL: http://192.168.56.40:3000
-          - User: admin / Password: admin
-          - Dashboard: "Comprehensive Logs Dashboard"
-          
-          📋 Logs collected:
-          - NGINX Access Logs (all servers)
-          - NGINX Error Logs (all servers)
-          - MySQL Error Logs (app-main, app-stby)
-          
-          ══════════════════════════════════════════════════════════════
-
-    - name: Restart Grafana to apply dashboards
-      systemd:
-        name: grafana-server
-        state: restarted
-
-    - name: Wait for Grafana to restart
-      wait_for:
-        port: 3000
-        timeout: 30
-        delay: 5
+        ]
+      }
+    owner: grafana
+    group: grafana
+    mode: '0644'
