@@ -44,7 +44,7 @@
         - /var/log/fluent-bit
 
     # ============================================================
-    # 2. НАСТРОЙКА FLUENT BIT (ИСПРАВЛЕННАЯ)
+    # 2. НАСТРОЙКА FLUENT BIT С Read_From_Head
     # ============================================================
     - name: Create Fluent Bit parser config
       copy:
@@ -64,7 +64,7 @@
               Time_Key time
               Time_Format %Y-%m-%dT%H:%M:%S.%LZ
 
-    - name: Create Fluent Bit main config (исправленный)
+    - name: Create Fluent Bit main config (с Read_From_Head)
       copy:
         dest: /etc/fluent-bit/fluent-bit.conf
         content: |
@@ -81,50 +81,56 @@
           # INPUT: NGINX LOGS
           # ========================================
           [INPUT]
-              Name          tail
-              Path          /var/log/nginx/access.log
-              Parser        nginx
-              Tag           nginx_access
-              Path_Key      filename
+              Name              tail
+              Path              /var/log/nginx/access.log
+              Parser            nginx
+              Tag               nginx_access
+              Path_Key          filename
+              Read_From_Head    true
+              Refresh_Interval  1
 
           [INPUT]
-              Name          tail
-              Path          /var/log/nginx/error.log
-              Parser        nginx
-              Tag           nginx_error
-              Path_Key      filename
+              Name              tail
+              Path              /var/log/nginx/error.log
+              Parser            nginx
+              Tag               nginx_error
+              Path_Key          filename
+              Read_From_Head    true
+              Refresh_Interval  1
 
           # ========================================
           # INPUT: MYSQL LOGS (only on app-main and app-stby)
           # ========================================
           [INPUT]
-              Name          tail
-              Path          /var/log/mysql/error.log
-              Parser        mysql
-              Tag           mysql_error
-              Path_Key      filename
-              DB            /var/log/fluent-bit/mysql.db
+              Name              tail
+              Path              /var/log/mysql/error.log
+              Parser            mysql
+              Tag               mysql_error
+              Path_Key          filename
+              DB                /var/log/fluent-bit/mysql.db
+              Read_From_Head    true
+              Refresh_Interval  1
 
           # ========================================
           # FILTER: ADD HOSTNAME
           # ========================================
           [FILTER]
-              Name          modify
-              Match         *
-              Add           hostname {{ ansible_hostname }}
-              Add           environment production
-              Add           server_role {{ group_names | join(',') }}
+              Name              modify
+              Match             *
+              Add               hostname {{ ansible_hostname }}
+              Add               environment production
+              Add               server_role {{ group_names | join(',') }}
 
           # ========================================
-          # OUTPUT: LOKI (С line_format)
+          # OUTPUT: LOKI
           # ========================================
           [OUTPUT]
-              Name          loki
-              Match         *
-              Host          {{ loki_host }}
-              Port          {{ loki_port }}
-              Labels        job=fluentbit, host={{ ansible_hostname }}, type=$TAG
-              line_format   json
+              Name              loki
+              Match             *
+              Host              {{ loki_host }}
+              Port              {{ loki_port }}
+              Labels            job=fluentbit, host={{ ansible_hostname }}, type=$TAG
+              line_format       json
 
     # ============================================================
     # 3. ИСПРАВЛЕНИЕ SERVICE ФАЙЛА
