@@ -71,7 +71,7 @@
         remote_src: yes
 
     # ============================================================
-    # 2. НАСТРОЙКА ALERTMANAGER
+    # 2. НАСТРОЙКА ALERTMANAGER (ИСПРАВЛЕННАЯ)
     # ============================================================
     - name: Create Alertmanager config
       copy:
@@ -199,12 +199,10 @@
             - /etc/prometheus/rules/*.rules
 
           scrape_configs:
-            # Prometheus self
             - job_name: 'prometheus'
               static_configs:
                 - targets: ['localhost:9090']
 
-            # Node Exporter - Ops
             - job_name: 'node_ops'
               static_configs:
                 - targets: ['localhost:9100']
@@ -212,7 +210,6 @@
                     instance: ops
                     role: monitoring
 
-            # Node Exporter - Perimeter
             - job_name: 'node_perimeter'
               static_configs:
                 - targets: ['192.168.56.18:9100']
@@ -220,7 +217,6 @@
                     instance: perimeter
                     role: gateway
 
-            # Node Exporter - App Main
             - job_name: 'node_app_main'
               static_configs:
                 - targets: ['192.168.56.20:9100']
@@ -228,7 +224,6 @@
                     instance: app-main
                     role: application
 
-            # Node Exporter - App Stby
             - job_name: 'node_app_stby'
               static_configs:
                 - targets: ['192.168.56.30:9100']
@@ -236,7 +231,6 @@
                     instance: app-stby
                     role: application
 
-            # Blackbox Exporter - HTTP checks
             - job_name: 'blackbox_http'
               metrics_path: /probe
               params:
@@ -276,9 +270,6 @@
             - name: server_alerts
               interval: 30s
               rules:
-                # ==========================================
-                # SERVER DOWN ALERTS
-                # ==========================================
                 - alert: ServerDown_Perimeter
                   expr: up{instance="perimeter"} == 0
                   for: 1m
@@ -309,68 +300,6 @@
                     summary: "App-Stby server is down"
                     description: "App-Stby server (192.168.56.30) has been unreachable for more than 1 minute."
 
-                # ==========================================
-                # HIGH CPU ALERTS
-                # ==========================================
-                - alert: HighCPU_AppMain
-                  expr: 100 - (avg(rate(node_cpu_seconds_total{instance="app-main", mode="idle"}[5m])) * 100) > 80
-                  for: 5m
-                  labels:
-                    severity: warning
-                    service: app-main
-                  annotations:
-                    summary: "High CPU usage on App-Main"
-                    description: "App-Main CPU usage is above 80% for more than 5 minutes."
-
-                - alert: HighCPU_AppStby
-                  expr: 100 - (avg(rate(node_cpu_seconds_total{instance="app-stby", mode="idle"}[5m])) * 100) > 80
-                  for: 5m
-                  labels:
-                    severity: warning
-                    service: app-stby
-                  annotations:
-                    summary: "High CPU usage on App-Stby"
-                    description: "App-Stby CPU usage is above 80% for more than 5 minutes."
-
-                # ==========================================
-                # HIGH MEMORY ALERTS
-                # ==========================================
-                - alert: HighMemory_AppMain
-                  expr: (1 - (node_memory_MemAvailable_bytes{instance="app-main"} / node_memory_MemTotal_bytes{instance="app-main"})) * 100 > 85
-                  for: 5m
-                  labels:
-                    severity: warning
-                    service: app-main
-                  annotations:
-                    summary: "High Memory usage on App-Main"
-                    description: "App-Main Memory usage is above 85% for more than 5 minutes."
-
-                - alert: HighMemory_AppStby
-                  expr: (1 - (node_memory_MemAvailable_bytes{instance="app-stby"} / node_memory_MemTotal_bytes{instance="app-stby"})) * 100 > 85
-                  for: 5m
-                  labels:
-                    severity: warning
-                    service: app-stby
-                  annotations:
-                    summary: "High Memory usage on App-Stby"
-                    description: "App-Stby Memory usage is above 85% for more than 5 minutes."
-
-                # ==========================================
-                # HIGH DISK USAGE ALERTS
-                # ==========================================
-                - alert: HighDiskUsage_AppMain
-                  expr: (1 - (node_filesystem_avail_bytes{instance="app-main", mountpoint="/"} / node_filesystem_size_bytes{instance="app-main", mountpoint="/"})) * 100 > 80
-                  for: 5m
-                  labels:
-                    severity: warning
-                    service: app-main
-                  annotations:
-                    summary: "High Disk usage on App-Main"
-                    description: "App-Main Disk usage is above 80% for more than 5 minutes."
-
-                # ==========================================
-                # HTTP DOWN ALERTS (Blackbox)
-                # ==========================================
                 - alert: HTTPDown_Perimeter
                   expr: probe_success{job="blackbox_http", instance="http://192.168.56.18"} == 0
                   for: 1m
@@ -400,27 +329,14 @@
                   annotations:
                     summary: "HTTP service on App-Stby is down"
                     description: "HTTP service on App-Stby (http://192.168.56.30) is not responding."
-
-                # ==========================================
-                # MYSQL REPLICATION ALERTS
-                # ==========================================
-                - alert: MySQLReplicationDown
-                  expr: mysql_global_status_slave_running == 0
-                  for: 1m
-                  labels:
-                    severity: critical
-                    service: mysql
-                  annotations:
-                    summary: "MySQL replication is down"
-                    description: "MySQL replication on app-stby is not running."
         owner: prometheus
         group: prometheus
         mode: '0644'
 
     # ============================================================
-    # 6. ПЕРЕЗАПУСК PROMETHEUS
+    # 6. ПЕРЕЗАПУСК
     # ============================================================
-    - name: Restart Prometheus to apply new config
+    - name: Restart Prometheus
       systemd:
         name: prometheus
         state: restarted
@@ -469,10 +385,6 @@
           📋 Alerts configured:
           - Server Down (perimeter, app-main, app-stby)
           - HTTP Service Down (perimeter, app-main, app-stby)
-          - High CPU usage (app-main, app-stby)
-          - High Memory usage (app-main, app-stby)
-          - High Disk usage (app-main, app-stby)
-          - MySQL Replication Down (app-stby)
           
           ══════════════════════════════════════════════════════════════
 
