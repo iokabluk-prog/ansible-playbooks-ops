@@ -44,7 +44,7 @@
         - /var/log/fluent-bit
 
     # ============================================================
-    # 2. НАСТРОЙКА FLUENT BIT
+    # 2. НАСТРОЙКА FLUENT BIT (ИСПРАВЛЕННАЯ)
     # ============================================================
     - name: Create Fluent Bit parser config
       copy:
@@ -64,7 +64,7 @@
               Time_Key time
               Time_Format %Y-%m-%dT%H:%M:%S.%LZ
 
-    - name: Create Fluent Bit main config
+    - name: Create Fluent Bit main config (исправленный)
       copy:
         dest: /etc/fluent-bit/fluent-bit.conf
         content: |
@@ -116,7 +116,7 @@
               Add           server_role {{ group_names | join(',') }}
 
           # ========================================
-          # OUTPUT: LOKI
+          # OUTPUT: LOKI (БЕЗ BATCHWAIT И BATCHSIZE)
           # ========================================
           [OUTPUT]
               Name          loki
@@ -124,8 +124,6 @@
               Host          {{ loki_host }}
               Port          {{ loki_port }}
               Labels        job=fluentbit, host={{ ansible_hostname }}, type=$TAG
-              BatchWait     5
-              BatchSize     102400
               LineFormat    json
 
     # ============================================================
