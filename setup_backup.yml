@@ -1,0 +1,62 @@
+---
+- name: Setup MySQL backups on ops
+  hosts: ops
+  become: yes
+  gather_facts: yes
+
+  vars:
+    backup_dir: "/var/backups/mysql"
+    retention_days: 30
+    mysql_root_password: "SecureRootPass123!"
+    master_host: "192.168.56.20"
+    replica_host: "192.168.56.30"
+
+  tasks:
+    - name: Create backup directory
+      file:
+        path: "{{ backup_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Create backup script
+      copy:
+        dest: /usr/local/bin/backup_mysql.sh
+        content: |
+          #!/bin/bash
+          BACKUP_DIR="{{ backup_dir }}"
+          DATE=$(date +%Y%m%d_%H%M%S)
+          RETENTION_DAYS={{ retention_days }}
+
+          mkdir -p $BACKUP_DIR
+
+          # Backup from master
+          mysqldump -h {{ master_host }} -u root -p{{ mysql_root_password }} app_db > $BACKUP_DIR/app_main_$DATE.sql 2>/dev/null
+
+          if [ $? -ne 0 ]; then
+              mysqldump -h {{ replica_host }} -u root -p{{ mysql_root_password }} app_db > $BACKUP_DIR/app_stby_$DATE.sql 2>/dev/null
+          fi
+
+          gzip $BACKUP_DIR/*_$DATE.sql
+          find $BACKUP_DIR -name "*.sql.gz" -mtime +$RETENTION_DAYS -delete
+          echo "Backup completed: $DATE"
+        mode: '0755'
+
+    - name: Setup backup cron job
+      cron:
+        name: "MySQL backup"
+        hour: "2"
+        minute: "0"
+        job: "/usr/local/bin/backup_mysql.sh > /var/log/backup.log 2>&1"
+        state: present
+
+    - name: Create test backup
+      shell: /usr/local/bin/backup_mysql.sh
+      register: backup_result
+
+    - name: Display backup info
+      debug:
+        msg: |
+          ✅ Backups configured!
+          📁 Backup directory: {{ backup_dir }}
+          📅 Retention: {{ retention_days }} days
+          ⏰ Schedule: Daily at 2:00 AM
