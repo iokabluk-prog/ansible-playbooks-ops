@@ -71,104 +71,12 @@
         remote_src: yes
 
     # ============================================================
-    # 2. НАСТРОЙКА ALERTMANAGER ДЛЯ EMAIL
+    # 2. НАСТРОЙКА ALERTMANAGER (ЧЕРЕЗ ШАБЛОН)
     # ============================================================
-    - name: Create Alertmanager config with email alerts
-      copy:
+    - name: Create Alertmanager config from template
+      template:
+        src: alertmanager.yml.j2
         dest: "{{ alertmanager_config_dir }}/alertmanager.yml"
-        content: |
-          route:
-            group_by: ['alertname', 'cluster', 'service']
-            group_wait: 10s
-            group_interval: 10s
-            repeat_interval: 1h
-            receiver: 'email-notifications'
-            routes:
-              - match:
-                  severity: 'critical'
-                receiver: 'email-notifications'
-                continue: true
-              - match:
-                  severity: 'warning'
-                receiver: 'email-notifications'
-                continue: true
-
-          receivers:
-            - name: 'email-notifications'
-              email_configs:
-                - to: '{{ email_to }}'
-                  from: '{{ email_from }}'
-                  smarthost: '{{ smtp_host }}:{{ smtp_port }}'
-                  auth_username: '{{ smtp_user }}'
-                  auth_password: '{{ smtp_password }}'
-                  require_tls: false
-                  send_resolved: true
-                  headers:
-                    Subject: '🚨 ALERT: {{ "{{ .GroupLabels.alertname }}" }}'
-                  html: |
-                    <!DOCTYPE html>
-                    <html>
-                    <head>
-                      <meta charset="UTF-8">
-                      <title>Alert Notification</title>
-                      <style>
-                        body { font-family: Arial, sans-serif; color: #333; }
-                        .container { max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 5px; }
-                        .header { background: #dc3545; color: white; padding: 10px; text-align: center; border-radius: 5px 5px 0 0; }
-                        .content { padding: 20px; }
-                        .alert-detail { background: #f8f9fa; padding: 10px; margin: 10px 0; border-left: 4px solid #dc3545; }
-                        .footer { text-align: center; font-size: 12px; color: #999; margin-top: 20px; }
-                        .status-firing { color: #dc3545; font-weight: bold; }
-                        .status-resolved { color: #28a745; font-weight: bold; }
-                      </style>
-                    </head>
-                    <body>
-                      <div class="container">
-                        <div class="header">
-                          <h2>🚨 {{ "{{ .Status | title }}" }} Alert</h2>
-                        </div>
-                        <div class="content">
-                          <h3>⚠️ {{ "{{ .GroupLabels.alertname }}" }}</h3>
-
-                          <div class="alert-detail">
-                            <p><strong>Status:</strong> <span class="status-{{ "{{ .Status }}" }}">{{ "{{ .Status | title }}" }}</span></p>
-                            <p><strong>Severity:</strong> {{ "{{ .CommonLabels.severity }}" }}</p>
-                            <p><strong>Service:</strong> {{ "{{ .CommonLabels.service }}" }}</p>
-                            <p><strong>Instance:</strong> {{ "{{ .CommonLabels.instance }}" }}</p>
-                            <p><strong>Time:</strong> {{ "{{ .StartsAt.Format \"2006-01-02 15:04:05 MSK\" }}" }}</p>
-                          </div>
-
-                          {{ "{{ if .CommonAnnotations.summary }}" }}
-                          <p><strong>📋 Summary:</strong> {{ "{{ .CommonAnnotations.summary }}" }}</p>
-                          {{ "{{ end }}" }}
-
-                          {{ "{{ if .CommonAnnotations.description }}" }}
-                          <p><strong>📝 Description:</strong> {{ "{{ .CommonAnnotations.description }}" }}</p>
-                          {{ "{{ end }}" }}
-
-                          <hr>
-
-                          <p><strong>Labels:</strong></p>
-                          <ul>
-                            {{ "{{ range $key, $value := .CommonLabels }}" }}
-                              <li><strong>{{ "{{ $key }}" }}:</strong> {{ "{{ $value }}" }}</li>
-                            {{ "{{ end }}" }}
-                          </ul>
-                        </div>
-                        <div class="footer">
-                          <p>This is an automated alert from Prometheus Alertmanager.</p>
-                          <p>{{ "{{ .StartsAt.Format \"2006-01-02 15:04:05\" }}" }} UTC</p>
-                        </div>
-                      </div>
-                    </body>
-                    </html>
-
-          inhibit_rules:
-            - source_match:
-                severity: 'critical'
-              target_match:
-                severity: 'warning'
-              equal: ['alertname', 'cluster']
         owner: prometheus
         group: prometheus
         mode: '0644'
