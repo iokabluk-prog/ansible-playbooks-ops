@@ -1,3 +1,4 @@
+cat > ~/scripts/ops/ansible/templates/alertmanager.yml.j2 << 'EOF'
 route:
   group_by: ['alertname']
   group_wait: 10s
@@ -8,15 +9,15 @@ route:
 receivers:
   - name: 'email-notifications'
     email_configs:
-      - to: 'i27021985@mail.ru'
-        from: 'i27021985@mail.ru'
-        smarthost: 'smtp.mail.ru:465'
-        auth_username: 'i27021985@mail.ru'
-        auth_password: 'jgKPy6JcAQJVaR28bY7S'
+      - to: '{{ email_to }}'
+        from: '{{ email_from }}'
+        smarthost: '{{ smtp_host }}:{{ smtp_port }}'
+        auth_username: '{{ smtp_user }}'
+        auth_password: '{{ smtp_password }}'
         require_tls: false
         send_resolved: true
         headers:
-          Subject: '🚨 ALERT: {{ .GroupLabels.alertname }}'
+          Subject: '🚨 ALERT: {{ "{{ .GroupLabels.alertname }}" }}'
         html: |
           <!DOCTYPE html>
           <html>
@@ -35,36 +36,36 @@ receivers:
           <body>
             <div class="container">
               <div class="header">
-                <h2>🚨 {{ .GroupLabels.alertname }}</h2>
+                <h2>🚨 {{ "{{ .GroupLabels.alertname }}" }}</h2>
               </div>
               <div class="content">
                 <div class="alert-detail">
-                  <p><strong>Status:</strong> {{ .Status }}</p>
-                  <p><strong>Severity:</strong> {{ .CommonLabels.severity }}</p>
-                  <p><strong>Service:</strong> {{ .CommonLabels.service }}</p>
-                  <p><strong>Instance:</strong> {{ .CommonLabels.instance }}</p>
-                  <p><strong>Time:</strong> {{ .StartsAt }}</p>
+                  <p><strong>Status:</strong> {{ "{{ .Status }}" }}</p>
+                  <p><strong>Severity:</strong> {{ "{{ .CommonLabels.severity }}" }}</p>
+                  <p><strong>Service:</strong> {{ "{{ .CommonLabels.service }}" }}</p>
+                  <p><strong>Instance:</strong> {{ "{{ .CommonLabels.instance }}" }}</p>
+                  <p><strong>Time:</strong> {{ "{{ .StartsAt }}" }}</p>
                 </div>
 
-                {{ if .CommonAnnotations.summary }}
-                <p><strong>📋 Summary:</strong> {{ .CommonAnnotations.summary }}</p>
-                {{ end }}
+                {{ "{{ if .CommonAnnotations.summary }}" }}
+                <p><strong>📋 Summary:</strong> {{ "{{ .CommonAnnotations.summary }}" }}</p>
+                {{ "{{ end }}" }}
 
-                {{ if .CommonAnnotations.description }}
-                <p><strong>📝 Description:</strong> {{ .CommonAnnotations.description }}</p>
-                {{ end }}
+                {{ "{{ if .CommonAnnotations.description }}" }}
+                <p><strong>📝 Description:</strong> {{ "{{ .CommonAnnotations.description }}" }}</p>
+                {{ "{{ end }}" }}
 
                 <hr>
                 <h4>Labels:</h4>
                 <ul>
-                  {{ range $key, $value := .CommonLabels }}
-                    <li><strong>{{ $key }}:</strong> {{ $value }}</li>
-                  {{ end }}
+                  {{ "{{ range $key, $value := .CommonLabels }}" }}
+                    <li><strong>{{ "{{ $key }}" }}:</strong> {{ "{{ $value }}" }}</li>
+                  {{ "{{ end }}" }}
                 </ul>
               </div>
               <div class="footer">
                 <p>This is an automated alert from Prometheus Alertmanager.</p>
-                <p>Time: {{ .StartsAt }} UTC</p>
+                <p>Time: {{ "{{ .StartsAt }}" }} UTC</p>
               </div>
             </div>
           </body>
@@ -76,3 +77,4 @@ inhibit_rules:
     target_match:
       severity: 'warning'
     equal: ['alertname']
+EOF
