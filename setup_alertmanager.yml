@@ -10,11 +10,11 @@
     alertmanager_config_dir: "/etc/alertmanager"
     alertmanager_data_dir: "/var/lib/alertmanager"
     email_to: "i27021985@mail.ru"
-    email_from: "alertmanager@ops.local"
+    email_from: "i27021985@mail.ru"
     smtp_host: "smtp.mail.ru"
     smtp_port: 465
     smtp_user: "i27021985@mail.ru"
-    smtp_password: "jgKPy6JcAQJVaR28bY7S"  # Замените на пароль приложения
+    smtp_password: "jgKPy6JcAQJVaR28bY7S"
 
   tasks:
     # ============================================================
@@ -71,15 +71,108 @@
         remote_src: yes
 
     # ============================================================
-    # 2. НАСТРОЙКА ALERTMANAGER (ЧЕРЕЗ ШАБЛОН)
+    # 2. НАСТРОЙКА ALERTMANAGER ДЛЯ EMAIL
     # ============================================================
-    - name: Create Alertmanager config from template
-      template:
-        src: alertmanager.yml.j2
+    - name: Create Alertmanager config with email alerts
+      copy:
         dest: "{{ alertmanager_config_dir }}/alertmanager.yml"
+        content: |
+          route:
+            group_by: ['alertname', 'cluster', 'service']
+            group_wait: 10s
+            group_interval: 10s
+            repeat_interval: 1h
+            receiver: 'email-notifications'
+            routes:
+              - match:
+                  severity: 'critical'
+                receiver: 'email-notifications'
+                continue: true
+              - match:
+                  severity: 'warning'
+                receiver: 'email-notifications'
+                continue: true
+
+          receivers:
+            - name: 'email-notifications'
+              email_configs:
+                - to: '{{ email_to }}'
+                  from: '{{ email_from }}'
+                  smarthost: '{{ smtp_host }}:{{ smtp_port }}'
+                  auth_username: '{{ smtp_user }}'
+                  auth_password: '{{ smtp_password }}'
+                  require_tls: false
+                  send_resolved: true
+                  headers:
+                    Subject: '🚨 ALERT: {{ "{{ .GroupLabels.alertname }}" }}'
+                  html: |
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                      <meta charset="UTF-8">
+                      <title>Alert Notification</title>
+                      <style>
+                        body { font-family: Arial, sans-serif; color: #333; }
+                        .container { max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 5px; }
+                        .header { background: #dc3545; color: white; padding: 10px; text-align: center; border-radius: 5px 5px 0 0; }
+                        .content { padding: 20px; }
+                        .alert-detail { background: #f8f9fa; padding: 10px; margin: 10px 0; border-left: 4px solid #dc3545; }
+                        .footer { text-align: center; font-size: 12px; color: #999; margin-top: 20px; }
+                        .status-firing { color: #dc3545; font-weight: bold; }
+                        .status-resolved { color: #28a745; font-weight: bold; }
+                      </style>
+                    </head>
+                    <body>
+                      <div class="container">
+                        <div class="header">
+                          <h2>🚨 {{ "{{ .Status | title }}" }} Alert</h2>
+                        </div>
+                        <div class="content">
+                          <h3>⚠️ {{ "{{ .GroupLabels.alertname }}" }}</h3>
+
+                          <div class="alert-detail">
+                            <p><strong>Status:</strong> <span class="status-{{ "{{ .Status }}" }}">{{ "{{ .Status | title }}" }}</span></p>
+                            <p><strong>Severity:</strong> {{ "{{ .CommonLabels.severity }}" }}</p>
+                            <p><strong>Service:</strong> {{ "{{ .CommonLabels.service }}" }}</p>
+                            <p><strong>Instance:</strong> {{ "{{ .CommonLabels.instance }}" }}</p>
+                            <p><strong>Time:</strong> {{ "{{ .StartsAt.Format \"2006-01-02 15:04:05 MSK\" }}" }}</p>
+                          </div>
+
+                          {{ "{{ if .CommonAnnotations.summary }}" }}
+                          <p><strong>📋 Summary:</strong> {{ "{{ .CommonAnnotations.summary }}" }}</p>
+                          {{ "{{ end }}" }}
+
+                          {{ "{{ if .CommonAnnotations.description }}" }}
+                          <p><strong>📝 Description:</strong> {{ "{{ .CommonAnnotations.description }}" }}</p>
+                          {{ "{{ end }}" }}
+
+                          <hr>
+
+                          <p><strong>Labels:</strong></p>
+                          <ul>
+                            {{ "{{ range $key, $value := .CommonLabels }}" }}
+                              <li><strong>{{ "{{ $key }}" }}:</strong> {{ "{{ $value }}" }}</li>
+                            {{ "{{ end }}" }}
+                          </ul>
+                        </div>
+                        <div class="footer">
+                          <p>This is an automated alert from Prometheus Alertmanager.</p>
+                          <p>{{ "{{ .StartsAt.Format \"2006-01-02 15:04:05\" }}" }} UTC</p>
+                        </div>
+                      </div>
+                    </body>
+                    </html>
+
+          inhibit_rules:
+            - source_match:
+                severity: 'critical'
+              target_match:
+                severity: 'warning'
+              equal: ['alertname', 'cluster']
         owner: prometheus
         group: prometheus
         mode: '0644'
+      notify: restart alertmanager
 
     # ============================================================
     # 3. SYSTEMD SERVICE
@@ -202,7 +295,7 @@
         mode: '0644'
 
     # ============================================================
-    # 5. СОЗДАНИЕ ПРАВИЛ АЛЕРТОВ
+    # 5. ПРАВИЛА АЛЕРТОВ
     # ============================================================
     - name: Create alerts rules directory
       file:
@@ -212,12 +305,12 @@
         group: prometheus
         mode: '0755'
 
-    - name: Create alerts rules file
+    - name: Create server down alerts rules
       copy:
-        dest: /etc/prometheus/rules/alerts.rules
+        dest: /etc/prometheus/rules/server_down.rules
         content: |
           groups:
-            - name: server_alerts
+            - name: server_down_alerts
               interval: 30s
               rules:
                 - alert: ServerDown_Perimeter
@@ -226,9 +319,10 @@
                   labels:
                     severity: critical
                     service: perimeter
+                    instance: perimeter
                   annotations:
-                    summary: "Perimeter server is down"
-                    description: "Perimeter server (192.168.56.18) has been unreachable for more than 1 minute."
+                    summary: "🚨 Perimeter Server is DOWN!"
+                    description: "Perimeter server (192.168.56.18) is not responding."
 
                 - alert: ServerDown_AppMain
                   expr: up{instance="app-main"} == 0
@@ -236,9 +330,10 @@
                   labels:
                     severity: critical
                     service: app-main
+                    instance: app-main
                   annotations:
-                    summary: "App-Main server is down"
-                    description: "App-Main server (192.168.56.20) has been unreachable for more than 1 minute."
+                    summary: "🚨 App-Main Server is DOWN!"
+                    description: "App-Main server (192.168.56.20) is not responding."
 
                 - alert: ServerDown_AppStby
                   expr: up{instance="app-stby"} == 0
@@ -246,9 +341,10 @@
                   labels:
                     severity: critical
                     service: app-stby
+                    instance: app-stby
                   annotations:
-                    summary: "App-Stby server is down"
-                    description: "App-Stby server (192.168.56.30) has been unreachable for more than 1 minute."
+                    summary: "🚨 App-Stby Server is DOWN!"
+                    description: "App-Stby server (192.168.56.30) is not responding."
 
                 - alert: HTTPDown_Perimeter
                   expr: probe_success{job="blackbox_http", instance="http://192.168.56.18"} == 0
@@ -256,8 +352,9 @@
                   labels:
                     severity: critical
                     service: perimeter
+                    instance: perimeter-http
                   annotations:
-                    summary: "HTTP service on Perimeter is down"
+                    summary: "🚨 Perimeter HTTP Service is DOWN!"
                     description: "HTTP service on Perimeter (http://192.168.56.18) is not responding."
 
                 - alert: HTTPDown_AppMain
@@ -266,8 +363,9 @@
                   labels:
                     severity: critical
                     service: app-main
+                    instance: app-main-http
                   annotations:
-                    summary: "HTTP service on App-Main is down"
+                    summary: "🚨 App-Main HTTP Service is DOWN!"
                     description: "HTTP service on App-Main (http://192.168.56.20) is not responding."
 
                 - alert: HTTPDown_AppStby
@@ -276,79 +374,10 @@
                   labels:
                     severity: critical
                     service: app-stby
+                    instance: app-stby-http
                   annotations:
-                    summary: "HTTP service on App-Stby is down"
+                    summary: "🚨 App-Stby HTTP Service is DOWN!"
                     description: "HTTP service on App-Stby (http://192.168.56.30) is not responding."
-
-                - alert: HighCPU_AppMain
-                  expr: 100 - (avg(rate(node_cpu_seconds_total{instance="app-main", mode="idle"}[5m])) * 100) > 80
-                  for: 5m
-                  labels:
-                    severity: warning
-                    service: app-main
-                  annotations:
-                    summary: "High CPU usage on App-Main"
-                    description: "App-Main CPU usage is above 80% for more than 5 minutes."
-
-                - alert: HighCPU_AppStby
-                  expr: 100 - (avg(rate(node_cpu_seconds_total{instance="app-stby", mode="idle"}[5m])) * 100) > 80
-                  for: 5m
-                  labels:
-                    severity: warning
-                    service: app-stby
-                  annotations:
-                    summary: "High CPU usage on App-Stby"
-                    description: "App-Stby CPU usage is above 80% for more than 5 minutes."
-
-                - alert: HighMemory_AppMain
-                  expr: (1 - (node_memory_MemAvailable_bytes{instance="app-main"} / node_memory_MemTotal_bytes{instance="app-main"})) * 100 > 85
-                  for: 5m
-                  labels:
-                    severity: warning
-                    service: app-main
-                  annotations:
-                    summary: "High Memory usage on App-Main"
-                    description: "App-Main Memory usage is above 85% for more than 5 minutes."
-
-                - alert: HighMemory_AppStby
-                  expr: (1 - (node_memory_MemAvailable_bytes{instance="app-stby"} / node_memory_MemTotal_bytes{instance="app-stby"})) * 100 > 85
-                  for: 5m
-                  labels:
-                    severity: warning
-                    service: app-stby
-                  annotations:
-                    summary: "High Memory usage on App-Stby"
-                    description: "App-Stby Memory usage is above 85% for more than 5 minutes."
-
-                - alert: HighDiskUsage_AppMain
-                  expr: (1 - (node_filesystem_avail_bytes{instance="app-main", mountpoint="/"} / node_filesystem_size_bytes{instance="app-main", mountpoint="/"})) * 100 > 80
-                  for: 5m
-                  labels:
-                    severity: warning
-                    service: app-main
-                  annotations:
-                    summary: "High Disk usage on App-Main"
-                    description: "App-Main Disk usage is above 80% for more than 5 minutes."
-
-                - alert: HighDiskUsage_AppStby
-                  expr: (1 - (node_filesystem_avail_bytes{instance="app-stby", mountpoint="/"} / node_filesystem_size_bytes{instance="app-stby", mountpoint="/"})) * 100 > 80
-                  for: 5m
-                  labels:
-                    severity: warning
-                    service: app-stby
-                  annotations:
-                    summary: "High Disk usage on App-Stby"
-                    description: "App-Stby Disk usage is above 80% for more than 5 minutes."
-
-                - alert: MySQLReplicationDown
-                  expr: mysql_global_status_slave_running == 0
-                  for: 1m
-                  labels:
-                    severity: critical
-                    service: mysql
-                  annotations:
-                    summary: "MySQL replication is down"
-                    description: "MySQL replication on app-stby is not running."
         owner: prometheus
         group: prometheus
         mode: '0644'
@@ -405,10 +434,6 @@
           📋 Alerts configured:
           - Server Down (perimeter, app-main, app-stby)
           - HTTP Service Down (perimeter, app-main, app-stby)
-          - High CPU usage (app-main, app-stby)
-          - High Memory usage (app-main, app-stby)
-          - High Disk usage (app-main, app-stby)
-          - MySQL Replication Down (app-stby)
           
           ══════════════════════════════════════════════════════════════
 
@@ -419,3 +444,9 @@
       loop:
         - /tmp/alertmanager.tar.gz
         - "/tmp/alertmanager-{{ alertmanager_version }}.linux-amd64"
+
+  handlers:
+    - name: restart alertmanager
+      systemd:
+        name: alertmanager
+        state: restarted
