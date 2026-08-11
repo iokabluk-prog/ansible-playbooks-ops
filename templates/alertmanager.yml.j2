@@ -1,4 +1,3 @@
-cat > ~/scripts/ops/ansible/templates/alertmanager.yml.j2 << 'EOF'
 route:
   group_by: ['alertname']
   group_wait: 10s
@@ -9,24 +8,67 @@ route:
 receivers:
   - name: 'email-notifications'
     email_configs:
-      - to: '{{ email_to }}'
-        from: '{{ email_from }}'
-        smarthost: '{{ smtp_host }}:{{ smtp_port }}'
-        auth_username: '{{ smtp_user }}'
-        auth_password: '{{ smtp_password }}'
+      - to: 'i27021985@mail.ru'
+        from: 'i27021985@mail.ru'
+        smarthost: 'smtp.mail.ru:465'
+        auth_username: 'i27021985@mail.ru'
+        auth_password: 'jgKPy6JcAQJVaR28bY7S'
         require_tls: false
         send_resolved: true
         headers:
-          Subject: '🚨 ALERT: {{ "{{ .GroupLabels.alertname }}" }}'
+          Subject: '🚨 ALERT: {{ .GroupLabels.alertname }}'
         html: |
-          <h2>🚨 {{ "{{ .GroupLabels.alertname }}" }}</h2>
-          <p><strong>Status:</strong> {{ "{{ .Status }}" }}</p>
-          <p><strong>Severity:</strong> {{ "{{ .CommonLabels.severity }}" }}</p>
-          <p><strong>Service:</strong> {{ "{{ .CommonLabels.service }}" }}</p>
-          <p><strong>Instance:</strong> {{ "{{ .CommonLabels.instance }}" }}</p>
-          <p><strong>Time:</strong> {{ "{{ .StartsAt }}" }}</p>
-          <p><strong>Summary:</strong> {{ "{{ .CommonAnnotations.summary }}" }}</p>
-          <p><strong>Description:</strong> {{ "{{ .CommonAnnotations.description }}" }}</p>
+          <!DOCTYPE html>
+          <html>
+          <head>
+            <meta charset="UTF-8">
+            <title>Alert Notification</title>
+            <style>
+              body { font-family: Arial, sans-serif; color: #333; }
+              .container { max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 5px; }
+              .header { background: #dc3545; color: white; padding: 10px; text-align: center; border-radius: 5px 5px 0 0; }
+              .content { padding: 20px; }
+              .alert-detail { background: #f8f9fa; padding: 10px; margin: 10px 0; border-left: 4px solid #dc3545; }
+              .footer { text-align: center; font-size: 12px; color: #999; margin-top: 20px; }
+            </style>
+          </head>
+          <body>
+            <div class="container">
+              <div class="header">
+                <h2>🚨 {{ .GroupLabels.alertname }}</h2>
+              </div>
+              <div class="content">
+                <div class="alert-detail">
+                  <p><strong>Status:</strong> {{ .Status }}</p>
+                  <p><strong>Severity:</strong> {{ .CommonLabels.severity }}</p>
+                  <p><strong>Service:</strong> {{ .CommonLabels.service }}</p>
+                  <p><strong>Instance:</strong> {{ .CommonLabels.instance }}</p>
+                  <p><strong>Time:</strong> {{ .StartsAt }}</p>
+                </div>
+
+                {{ if .CommonAnnotations.summary }}
+                <p><strong>📋 Summary:</strong> {{ .CommonAnnotations.summary }}</p>
+                {{ end }}
+
+                {{ if .CommonAnnotations.description }}
+                <p><strong>📝 Description:</strong> {{ .CommonAnnotations.description }}</p>
+                {{ end }}
+
+                <hr>
+                <h4>Labels:</h4>
+                <ul>
+                  {{ range $key, $value := .CommonLabels }}
+                    <li><strong>{{ $key }}:</strong> {{ $value }}</li>
+                  {{ end }}
+                </ul>
+              </div>
+              <div class="footer">
+                <p>This is an automated alert from Prometheus Alertmanager.</p>
+                <p>Time: {{ .StartsAt }} UTC</p>
+              </div>
+            </div>
+          </body>
+          </html>
 
 inhibit_rules:
   - source_match:
@@ -34,4 +76,3 @@ inhibit_rules:
     target_match:
       severity: 'warning'
     equal: ['alertname']
-EOF
